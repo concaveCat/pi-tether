@@ -1,11 +1,20 @@
-# pi-web — 手机上的 WSL `pi` 工作台
+# pi-web — 手机上的 `pi` 工作台
 
-手机浏览器（经 Tailscale 私网）访问 `/root`，以**对话形式**使用 `pi`：正文、思考过程、bash 调用、
-文件编辑 diff、返回结果都是结构化渲染，输入在最下方的对话框里。需要原生 TUI 时再切到终端视图
-（`node-pty` + `tmux`，`/resume` 等一切照旧）。
+<p align="center">
+  <img src="docs/chat.png" width="240" alt="对话视图">
+  <img src="docs/files.png" width="240" alt="文件视图">
+  <img src="docs/terminal.png" width="240" alt="终端视图">
+</p>
+<p align="center"><sub>对话（结构化 transcript） · 文件（沙箱内浏览/预览） · 终端（真 PTY + tmux，带手机快捷键栏）</sub></p>
+
+> 只想跑起来？看 [`docs/QUICKSTART.md`](docs/QUICKSTART.md)（60 秒，5 行命令）。
+
+手机浏览器（经 Tailscale 等私网）访问你的 `$HOME`（`PIWEB_ROOT` 可改），以**对话形式**使用 `pi`：
+正文、思考过程、bash 调用、文件编辑 diff、返回结果都是结构化渲染，输入在最下方的对话框里，
+可以随手贴张图给模型看。需要原生 TUI 时再切到终端视图（`node-pty` + `tmux`，`/resume` 等一切照旧）。
 
 ```
-/root/pi-web
+pi-web/
 ├── server.mjs       HTTP/WS 层：鉴权、文件 API、tmux 会话 API、对话 API、终端 PTY 桥
 ├── chat.mjs         对话引擎：每个对话一个常驻 `pi --mode rpc` 子进程 + 结构化 transcript
 ├── public/index.html 手机端 UI（对话 / 文件 / 终端 三视图，纯白纸+细线排版）
@@ -13,6 +22,8 @@
 ├── tmux.conf        pi-web 启动 tmux server 时用的配置（xterm-256color + extended-keys）
 ├── start.sh         一键后台常驻（start/stop/restart/status/logs/install-systemd）
 ├── selftest.mjs     45 项端到端自检（鉴权/沙箱/会话/对话/TUI/断线存活/清理）
+├── tests/ownership.mjs  会话归属回归（同一 .jsonl 只允许一个写者）
+├── docs/            截图 + QUICKSTART
 ├── .env             首次启动生成：HOST / PORT / WEB_PASS / WEB_SECRET（600）
 └── logs/server.log
 ```
@@ -22,7 +33,7 @@
 | 依赖 | 说明 |
 |---|---|
 | Node.js **>= 20** | 必须能在同一条命令里跑起来（nvm 用户请在装了 node 的 shell 里执行） |
-| `pi` | `npm i -g @earendil-works/pi-coding-agent`，且 `pi` 在登录 shell 的 PATH 里 |
+| `pi` | `npm i -g @earendil-works/pi-coding-agent`，且 `pi` 在登录 shell 的 PATH 里。**已验证 1.5.2**；版本不同会在启动时打印提示（RPC 字段若有变动，先跑 `node selftest.mjs`） |
 | `tmux` | 会话持久化（终端视图 + `pi-*` 会话都靠它） |
 | 构建工具 | `node-pty` 是原生模块，装它需要 `make` / `g++` / `python3` |
 | Linux / macOS / WSL2 | Windows 原生不支持（依赖 pty + tmux）。WSL2 下要开 `systemd` 才能与 systemd 单元配合 |
@@ -90,7 +101,7 @@ node tests/ownership.mjs        # 会话归属回归（同 .jsonl 单写者，�
 | 你的消息 | `你` 标签 + 正文（细线分隔，气泡已去掉） |
 | 正文 | 轻量 markdown：粗体、行内代码、代码块、标题、链接、列表 |
 | 思考过程 | 折叠行 `▸ 思考 696 字`，点开是灰色斜体原文；流式时自动展开 |
-| 工具调用 | 折叠行 `▸ bash find /root …    ok · 16ms`；点开是命令 + 输出（失败自动展开） |
+| 工具调用 | 折叠行 `▸ bash find src …    ok · 16ms`；点开是命令 + 输出（失败自动展开） |
 | 文件编辑 | 折叠行 `▸ edit /path (1)`；点开是真实 unified diff，绿加红删 |
 | 写入/读取 | 折叠行 + 路径 + 内容/输出 |
 | 确认弹窗 | 扩展的 `confirm/select` 请求变成内联卡片（是/否/取消） |
@@ -144,7 +155,7 @@ RPC 模式也不会展开它们，原样发出去就是一段聊天文本——�
 `/tmp/pi-subagents-uid-<uid>/async-subagent-runs/*/status.json`（模型与工具数从子会话 jsonl 数出来，按 mtime 缓存）。
 有客户端在看时每 4s 轮询一次，内容变了才推；没人看就停。折叠/展开状态记在 localStorage。
 
-**文件** — `/root` 目录浏览（目录优先、名称排序）。行内显示大小，点目录进入，点文本文件弹层预览
+**文件** — `PIWEB_ROOT` 内目录浏览（默认 `$HOME`；目录优先、名称排序）。行内显示大小，点目录进入，点文本文件弹层预览
 （200KB 上限，二进制拒绝）。三个动作：`在此对话`（该目录的确定性对话，存在即复用）、`新对话`、`终端`。
 
 **终端** — 全屏 xterm（本地托管 `xterm.js` + `FitAddon`，零 CDN），真 `node-pty` + `tmux`。
@@ -154,7 +165,7 @@ RPC 模式也不会展开它们，原样发出去就是一段聊天文本——�
 ## 架构
 
 ```
-浏览器 ⇄ HTTP/WS ⇄ server.mjs ─┬─ fs（/root 沙箱）              → 文件 API
+浏览器 ⇄ HTTP/WS ⇄ server.mjs ─┬─ fs（PIWEB_ROOT 沙箱）         → 文件 API
                                ├─ execFileSync tmux …            → 终端会话 API
                                ├─ node-pty ⇄ tmux attach        → /ws   终端 PTY 桥
                                └─ chat.mjs ⇄ pi --mode rpc      → /ws/chat 对话流

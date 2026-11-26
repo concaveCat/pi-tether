@@ -39,7 +39,8 @@
     "README.md",
     "LICENSE",
     ".env.example",
-    "tests/"
+    "tests/",
+    "docs/"
   ],
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",

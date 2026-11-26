@@ -44,6 +44,13 @@ const ROOT = (() => {
     process.exit(1);
   }
 })();
+/** pi versions we have actually tested the RPC surface against */
+const VERIFIED_PI = '1.5.2';
+const PI_VERSION = (() => {
+  try {
+    return execFileSync('pi', ['--version'], { encoding: 'utf8', timeout: 15000 }).trim().split('\n')[0];
+  } catch { return null; }
+})();
 const TLS_CERT = process.env.PIWEB_TLS_CERT || '';
 const TLS_KEY = process.env.PIWEB_TLS_KEY || '';
 const USE_TLS = !!(TLS_CERT && TLS_KEY);
@@ -315,6 +322,7 @@ app.use(express.static(PUBLIC_DIR, { index: 'index.html', etag: false }));
 app.get('/api/me', (req, res) => res.json({
   ok: true, root: ROOT, sessionsRoot: SESSIONS_ROOT, shell: SHELL_BIN,
   pty: !!pty, tls: USE_TLS, node: process.version, port: PORT,
+  piVersion: PI_VERSION, verifiedPi: VERIFIED_PI,
 }));
 
 app.get('/api/files', async (req, res, next) => {
@@ -1036,6 +1044,14 @@ const healStart = Date.now();
 setTimeout(() => {
   console.log(`[pi-web] root sandbox: ${ROOT} · auth: WEB_PASS (${WEB_PASS.length} chars) + HttpOnly cookie`);
   console.log(`[pi-web] pi sessions: ${SESSIONS_ROOT} · shell: ${SHELL_BIN} · pty: ${pty ? 'on' : 'OFF'} · tls: ${USE_TLS ? 'on' : 'off'}`);
+  if (!PI_VERSION) {
+    console.warn('[pi-web] WARN: `pi --version` 不可用 —— 对话功能会失败（先 npm i -g @earendil-works/pi-coding-agent）');
+  } else if (PI_VERSION !== VERIFIED_PI) {
+    console.warn(`[pi-web] NOTE: pi ${PI_VERSION} 与已验证版本 ${VERIFIED_PI} 不同：`);
+    console.warn('           RPC 字段若有变动，可能表现为思考/工具结果不显示。遇到异常先 npm run selftest。');
+  } else {
+    console.log(`[pi-web] pi ${PI_VERSION} (已验证)`);
+  }
   try { const s = tmuxList(); console.log(`[pi-web] live pi sessions at boot: ${s.length}`); } catch {}
 }, 200);
 
