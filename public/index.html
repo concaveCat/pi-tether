@@ -1159,8 +1159,7 @@
     const goal = panel && panel.goal;
     const runs = (panel && panel.agents) || [];
     const drawer = $('drawer');
-    const hasGoalExt = (state.chat.piCommands || []).some((c) => c.name === 'goal');
-    if (!goal && !runs.length && !hasGoalExt) {
+    if (!goal && !runs.length) {
       drawer.hidden = true;
       $('drawerBody').innerHTML = '';
       $('drawerSum').innerHTML = '';
@@ -1170,7 +1169,6 @@
 
     /* ---- collapsed summary ---- */
     const sum = [];
-    if (!goal && hasGoalExt) sum.push('目标 <i>未开始</i>');
     if (goal) {
       sum.push(`目标 <b>${goal.taskDone}/${goal.taskTotal}</b> <i>${GOAL_WORD[goal.status] || goal.status}</i>`);
       if (goal.audit?.verdict) sum.push(goal.audit.verdict === 'approved' ? '<s>审计通过</s>' : '<u>审计未通过</u>');
@@ -1184,11 +1182,6 @@
 
     /* ---- expanded body ---- */
     const sec = [];
-    if (!goal && hasGoalExt) {
-      sec.push('<div class="dsec"><div class="dh">目标 <b>未开始</b></div>'
-        + '<div class="dobj">这个目录还没有目标。新建会走 pi-goal-x 的问答流程（下面会出现可点的问题卡片）。</div>'
-        + goalActionsHtml(null) + '</div>');
-    }
     if (goal) {
       const meta = [`${goal.taskDone}/${goal.taskTotal} 步`];
       if (goal.revision) meta.push('rev ' + goal.revision);
