@@ -1,5 +1,5 @@
 /**
- * chat.mjs — structured chat sessions for pi-web.
+ * chat.mjs — structured chat sessions for pi-tether.
  *
  * Each chat is a long-lived `pi --mode rpc` child process owned by the web
  * server (NOT by the WebSocket), so closing the phone browser never interrupts
@@ -23,12 +23,12 @@ const SESSIONS_ROOT = path.join(AGENT_DIR, 'sessions');
 
 /**
  * Login shell used for pi child processes. `-l` is what makes PATH / proxy /
- * API keys match the terminal, so we honour $SHELL / PIWEB_SHELL — but only for
+ * API keys match the terminal, so we honour $SHELL / PITETHER_SHELL — but only for
  * shells that can run the POSIX form `exec "$@"` (fish/csh/nu cannot).
  */
 const SHELL_BIN = (() => {
   const POSIX = /(bash|zsh|sh|ksh|dash|ash)$/;
-  const candidates = [process.env.PIWEB_SHELL, process.env.SHELL, '/bin/bash', '/bin/sh'];
+  const candidates = [process.env.PITETHER_SHELL, process.env.SHELL, '/bin/bash', '/bin/sh'];
   for (const c of candidates) {
     if (!c || !POSIX.test(c)) continue;
     try { fs.accessSync(c, fs.constants.X_OK); return c; } catch { /* try next */ }
@@ -259,7 +259,7 @@ export class Chat extends EventEmitter {
     if (resume) { this.lastSessionPath = resume; args.push('--session', resume); }
     // login shell so PATH / proxy / model config match the real terminal;
     // `exec "$@"` keeps argument boundaries intact (no shell string building)
-    this.child = spawn(SHELL_BIN, ['-lic', 'exec "$@"', 'pi-web', ...args], {
+    this.child = spawn(SHELL_BIN, ['-lic', 'exec "$@"', 'pi-tether', ...args], {
       cwd: this.dir,
       env: this.env,
       stdio: ['pipe', 'pipe', 'pipe'],

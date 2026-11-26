@@ -1,5 +1,5 @@
 {
-  "name": "pi-web",
+  "name": "pi-tether",
   "short_name": "pi",
   "description": "Mobile workbench for the pi coding agent",
   "start_url": "/",

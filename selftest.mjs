@@ -11,8 +11,8 @@ const PORT = process.env.PORT || (fs.existsSync(envFile) ? (fs.readFileSync(envF
 const BASE = process.env.B || `http://127.0.0.1:${PORT}`;
 const WS = BASE.replace(/^http/, 'ws');
 const PASS = process.env.P || envPass;
-// 沙箱根由服务端决定（PIWEB_ROOT 或 $HOME），自检不要假设 /root
-const ROOT = process.env.PIWEB_ROOT || (() => {
+// 沙箱根由服务端决定（PITETHER_ROOT 或 $HOME），自检不要假设 /root
+const ROOT = process.env.PITETHER_ROOT || (() => {
   try { return execFileSync('bash', ['-lc', 'printf %s "$HOME"'], { encoding: 'utf8' }).trim(); } catch { return '/root'; }
 })();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -61,11 +61,11 @@ const w1 = await new Promise((res) => {
 });
 check('未鉴权 WS /ws 拒绝连接', w1 === 401, 'got ' + w1);
 const bad = await api('/login', { method: 'POST', body: JSON.stringify({ password: 'wrong-password' }) });
-check('错误密码不发放 Cookie', bad.status !== 302 && !jar.piweb, 'status ' + bad.status);
+check('错误密码不发放 Cookie', bad.status !== 302 && !jar.pitether, 'status ' + bad.status);
 
 console.log('\n=== 2) 登录 + 沙箱 ===');
 const login = await api('/login', { method: 'POST', body: JSON.stringify({ password: PASS }) });
-check('正确密码 => 302 + HttpOnly Cookie', login.status === 302 && !!jar.piweb, 'status ' + login.status);
+check('正确密码 => 302 + HttpOnly Cookie', login.status === 302 && !!jar.pitether, 'status ' + login.status);
 const setCookie = login.headers.getSetCookie()[0];
 check('Cookie 带 HttpOnly', /HttpOnly/i.test(setCookie), setCookie.slice(0, 60) + '…');
 const ok1 = await api('/api/files?path=');
@@ -78,12 +78,12 @@ const t2 = await api('/api/file?path=../../etc/passwd');
 check('?path=../../etc/passwd => 400/403', t2.status === 400 || t2.status === 403, 'got ' + t2.status);
 const t3 = await api('/api/files?path=%2Fetc');
 check('?path=/etc => 400/403', t3.status === 400 || t3.status === 403, 'got ' + t3.status);
-execFileSync('ln', ['-sfn', '/etc', `${ROOT}/.piweb_esc`]);
-const t4 = await api('/api/files?path=.piweb_esc');
+execFileSync('ln', ['-sfn', '/etc', `${ROOT}/.pitether_esc`]);
+const t4 = await api('/api/files?path=.pitether_esc');
 check('软链接逃逸 => 403', t4.status === 403, 'got ' + t4.status + ' ' + t4.json?.error);
-const t5 = await api('/api/file?path=.piweb_esc/passwd');
+const t5 = await api('/api/file?path=.pitether_esc/passwd');
 check('软链接内文件 => 403', t5.status === 403, 'got ' + t5.status);
-execFileSync('rm', ['-f', `${ROOT}/.piweb_esc`]);
+execFileSync('rm', ['-f', `${ROOT}/.pitether_esc`]);
 const t6 = await api('/api/sessions/bad%3Brm%20-rf', { method: 'DELETE' });
 check('DELETE 非法会话名 => 400', t6.status === 400, 'got ' + t6.status);
 const wBad = await new Promise((res) => { const ws = new WebSocket(WS+'/ws?session=' + encodeURIComponent('pi-a;rm -rf /'), { headers: { Cookie: cookieHeader() } }); ws.on('unexpected-response', (_q, r) => res(r.statusCode)); ws.on('open', () => res(101)); ws.on('error', () => res('err')); setTimeout(() => res('timeout'), 3000); });
@@ -139,7 +139,7 @@ check('tmux ls 无 pi-* 残留', leftover === '', leftover || '(none)');
 
 
 console.log('\n=== 5) 对话视图（pi --mode rpc） ===');
-const c1 = await api('/api/chats', { method: 'POST', body: JSON.stringify({ path: 'pi-web', forceNew: true }) });
+const c1 = await api('/api/chats', { method: 'POST', body: JSON.stringify({ path: 'pi-tether', forceNew: true }) });
 check('POST /api/chats 起对话进程', c1.status === 200 && c1.json.alive === true, JSON.stringify({ name: c1.json.name, created: c1.json.created }));
 const chatName = c1.json.name;
 check('对话名匹配 ^chat-[a-zA-Z0-9_-]+$', /^chat-[a-zA-Z0-9_-]+$/.test(chatName), chatName);

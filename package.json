@@ -1,11 +1,11 @@
 {
-  "name": "pi-web",
+  "name": "pi-tether",
   "version": "0.1.0",
   "description": "Mobile web workbench for the pi coding agent: chat transcript, file browser and a real tmux/native PTY terminal, reachable over a private network.",
   "type": "module",
   "main": "server.mjs",
   "bin": {
-    "pi-web": "server.mjs"
+    "pi-tether": "server.mjs"
   },
   "scripts": {
     "start": "node server.mjs",

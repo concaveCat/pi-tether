@@ -12,7 +12,7 @@
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/icon-192.png">
 <link rel="icon" href="/icon-192.png">
-<title>pi-web</title>
+<title>pi-tether</title>
 <style>
   :root {
     --bg: #0b0e12;
@@ -339,7 +339,7 @@
 <div id="app">
   <header>
     <div class="row1">
-      <div class="brand">pi-web</div>
+      <div class="brand">pi-tether</div>
       <div class="spacer"></div>
       <div class="tabbar">
         <button class="tab on" id="tabChat">对话</button>
@@ -850,7 +850,7 @@
   }
 
   function paintTitle() {
-    const base = 'pi-web';
+    const base = 'pi-tether';
     document.title = notify.unread ? `(${notify.unread}) ${base}` : base;
   }
 
@@ -872,7 +872,7 @@
       if ('Notification' in window && Notification.permission === 'granted') {
         const last = [...state.chat.items.values()].reverse().find((i) => i.role === 'assistant');
         const text = plain((last?.blocks || []).map((b) => b.text || '').join(' ')).slice(0, 120) || '这一轮已经跑完';
-        const n = new Notification('pi-web · 完成', { body: text, tag: 'pi-web-done', silent: false, icon: '/icon-192.png' });
+        const n = new Notification('pi-tether · 完成', { body: text, tag: 'pi-tether-done', silent: false, icon: '/icon-192.png' });
         n.onclick = () => { window.focus(); clearUnread(); n.close(); };
       }
     } catch { /* notifications blocked */ }
@@ -909,7 +909,7 @@
   }
 
   /* pi's built-in TUI commands (/resume, /model, …) never reach RPC mode, so
-     pi-web implements the useful ones itself; everything else in
+     pi-tether implements the useful ones itself; everything else in
      `get_commands` (extensions, prompt templates, skills) is forwarded verbatim
      through `prompt`, where pi expands it. */
   /* ---------------- attachments (images) ---------------- */
@@ -1017,7 +1017,7 @@
     const rows = [];
     let group = null;
     items.forEach((it, i) => {
-      const g = it.builtin ? 'pi-web' : (it.source === 'extension' ? 'pi 扩展' : it.source === 'skill' ? 'pi 技能' : 'pi 模板');
+      const g = it.builtin ? 'pi-tether' : (it.source === 'extension' ? 'pi 扩展' : it.source === 'skill' ? 'pi 技能' : 'pi 模板');
       if (g !== group) { group = g; rows.push(`<div class="sgrp">${esc(g)}</div>`); }
       rows.push(`<div class="sitem${i === slash.idx ? ' on' : ''}" data-i="${i}">`
         + `<span class="sn">/${esc(it.name)}</span>`
@@ -1162,7 +1162,7 @@
   }
 
   function showHelp() {
-    const lines = ['pi-web 内置（本页面执行）'];
+    const lines = ['pi-tether 内置（本页面执行）'];
     for (const b of BUILTINS) lines.push(`  /${b.name}${b.arg ? ' ' + b.arg : ''}   ${b.desc}`);
     lines.push('', 'pi 命令（转发给 pi 执行：扩展 / 提示模板 / 技能）');
     for (const c of state.chat.piCommands || []) {
@@ -1621,7 +1621,7 @@
   $('chatInput').addEventListener('input', autosize);
   $('chatInput').addEventListener('focus', () => setTimeout(() => scrollChat(true), 250));
   /* the status drawer remembers whether it was open (phone reloads often) */
-  const DRAWER_KEY = 'piweb.drawer';
+  const DRAWER_KEY = 'pitether.drawer';
   if (localStorage.getItem(DRAWER_KEY) === '1') $('drawer').open = true;
   $('drawer').addEventListener('toggle', () => {
     localStorage.setItem(DRAWER_KEY, $('drawer').open ? '1' : '0');

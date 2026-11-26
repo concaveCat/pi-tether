@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * pi-web — mobile-friendly web front-end for the `pi` coding agent on this WSL box.
+ * pi-tether — mobile-friendly web front-end for the `pi` coding agent on this WSL box.
  *
- *  - file browser limited to PIWEB_ROOT (defaults to $HOME, realpath-checked)
+ *  - file browser limited to PITETHER_ROOT (defaults to $HOME, realpath-checked)
  *  - persistent per-directory `pi` sessions inside tmux (survive disconnects)
  *  - real PTY (node-pty) + tmux attach over WebSocket => full TUI fidelity
  *
@@ -22,11 +22,11 @@ import { WebSocketServer } from 'ws';
 import { Chat, findLatestSession, SESSIONS_ROOT, SHELL_BIN } from './chat.mjs';
 
 // node-pty is a native module: if it cannot be built/loaded the chat still works,
-// only the terminal view is unavailable (PIWEB_NO_PTY=1 forces that state).
+// only the terminal view is unavailable (PITETHER_NO_PTY=1 forces that state).
 let pty = null;
-if (process.env.PIWEB_NO_PTY !== '1') {
+if (process.env.PITETHER_NO_PTY !== '1') {
   try { pty = (await import('node-pty')).default; } catch (err) {
-    console.error(`[pi-web] WARN: node-pty 不可用（${err.code || err.message}），终端视图已禁用；` +
+    console.error(`[pi-tether] WARN: node-pty 不可用（${err.code || err.message}），终端视图已禁用；` +
       ' 其余功能正常。装构建工具后 npm rebuild node-pty 即可恢复。');
   }
 }
@@ -36,11 +36,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const HOST_SPEC = process.env.HOST || '127.0.0.1';
 const PORT = Number(process.env.PORT || 8765);
 const WEB_PASS = process.env.WEB_PASS || '';
-/** sandbox root: PIWEB_ROOT, else the invoking user's home */
+/** sandbox root: PITETHER_ROOT, else the invoking user's home */
 const ROOT = (() => {
-  const wanted = process.env.PIWEB_ROOT || os.homedir();
+  const wanted = process.env.PITETHER_ROOT || os.homedir();
   try { return fs.realpathSync(wanted); } catch {
-    console.error(`[pi-web] FATAL: PIWEB_ROOT 不存在: ${wanted}`);
+    console.error(`[pi-tether] FATAL: PITETHER_ROOT 不存在: ${wanted}`);
     process.exit(1);
   }
 })();
@@ -51,36 +51,36 @@ const PI_VERSION = (() => {
     return execFileSync('pi', ['--version'], { encoding: 'utf8', timeout: 15000 }).trim().split('\n')[0];
   } catch { return null; }
 })();
-const TLS_CERT = process.env.PIWEB_TLS_CERT || '';
-const TLS_KEY = process.env.PIWEB_TLS_KEY || '';
+const TLS_CERT = process.env.PITETHER_TLS_CERT || '';
+const TLS_KEY = process.env.PITETHER_TLS_KEY || '';
 const USE_TLS = !!(TLS_CERT && TLS_KEY);
 const MAX_PREVIEW = 200 * 1024;          // 200 KB text preview cap
 const SESSION_RE = /^pi-[a-zA-Z0-9_-]+$/;
 const CHAT_RE = /^chat-[a-zA-Z0-9_-]+$/;
 const SESSION_PREFIX = 'pi-';
-const COOKIE = 'piweb';
+const COOKIE = 'pitether';
 const MAX_AGE_S = 30 * 24 * 3600;
 
 if (!WEB_PASS) {
-  console.error('[pi-web] FATAL: WEB_PASS is not set. Refusing to start an unauthenticated shell service.');
+  console.error('[pi-tether] FATAL: WEB_PASS is not set. Refusing to start an unauthenticated shell service.');
   console.error('         export WEB_PASS="<your password>" && node server.mjs');
   process.exit(1);
 }
-if (WEB_PASS.length < 6) console.warn('[pi-web] WARNING: WEB_PASS is shorter than 6 chars — pick something stronger.');
+if (WEB_PASS.length < 6) console.warn('[pi-tether] WARNING: WEB_PASS is shorter than 6 chars — pick something stronger.');
 
 const SECRET = process.env.WEB_SECRET || crypto.randomBytes(32).toString('hex');
 
-// tmux config used for servers pi-web starts (xterm-256color + extended keys)
+// tmux config used for servers pi-tether starts (xterm-256color + extended keys)
 const TMUX_CONF = path.join(__dirname, 'tmux.conf');
 fs.writeFileSync(TMUX_CONF, [
-  '# written by pi-web/server.mjs — used via `tmux -f`',
+  '# written by pi-tether/server.mjs — used via `tmux -f`',
   'set -g default-terminal "xterm-256color"',
   'set -g extended-keys on',
   'set -as terminal-features "xterm*:extkeys"',
   '',
 ].join('\n'));
 if (!process.env.WEB_SECRET) {
-  console.warn('[pi-web] note: WEB_SECRET unset -> random per-process cookie key (restart logs you out).');
+  console.warn('[pi-tether] note: WEB_SECRET unset -> random per-process cookie key (restart logs you out).');
 }
 
 /* ------------------------------------------------------------------ helpers */
@@ -301,7 +301,7 @@ for (const f of ['/manifest.webmanifest', '/icon-192.png', '/icon-512.png', '/ic
 app.use((req, res, next) => {
   if (isAuthed(req)) return next();
   if (req.path.startsWith('/api/')) {
-    noCache(res, { 'WWW-Authenticate': 'Basic realm="pi-web", charset="UTF-8"' });
+    noCache(res, { 'WWW-Authenticate': 'Basic realm="pi-tether", charset="UTF-8"' });
     return res.status(401).json({ error: 'unauthorized' });
   }
   return res.redirect('/login');
@@ -485,7 +485,7 @@ const canonSessionPath = (p) => {
   try { return path.join(fs.realpathSync(dir), base); } catch { return path.resolve(p); }
 };
 const realOrNull = canonSessionPath;
-const OWN_DEBUG = process.env.PIWEB_DEBUG === '1';
+const OWN_DEBUG = process.env.PITETHER_DEBUG === '1';
 const ownLog = (...a) => { if (OWN_DEBUG) console.log('[own]', ...a); };
 const ownerOf = (p) => {
   const real = realOrNull(p);
@@ -545,7 +545,7 @@ function spawnChat(name, dirAbs, opts = {}) {
     chat.startForeignWatch();
   });
   chat.on('foreign', (file) => {
-    console.warn(`[pi-web] foreign writer on ${file} while ${name} is idle`);
+    console.warn(`[pi-tether] foreign writer on ${file} while ${name} is idle`);
   });
   chat.start();
   return chat;
@@ -632,7 +632,7 @@ setInterval(() => {
     if (chat.state.streaming || chat.scopeCount > 0) { chat.lastSeen = now; continue; }
     if (!chat.lastSeen) chat.lastSeen = now;
     if (now - chat.lastSeen > 30 * 60_000) {
-      console.log(`[pi-web] closing idle chat ${name}`);
+      console.log(`[pi-tether] closing idle chat ${name}`);
       chat.close();
       releaseChat(name);
       chats.delete(name);
@@ -646,7 +646,7 @@ app.use('/api', (req, res) => res.status(404).json({ error: 'not found' }));
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
   const status = err.status && Number.isInteger(err.status) ? err.status : 500;
-  if (status >= 500) console.error('[pi-web]', err);
+  if (status >= 500) console.error('[pi-tether]', err);
   if (res.headersSent) return res.end();
   if (req.path.startsWith('/api/')) return res.status(status).json({ error: err.message || 'error' });
   res.status(status).type('text').send(`${status} ${err.message || 'error'}`);
@@ -849,7 +849,7 @@ wss.on('connection', (ws, req, url) => {
   const rows = Math.max(6, Math.min(200, Number(url.searchParams.get('rows')) || 24));
 
   if (!pty) {
-    ws.send(JSON.stringify({ t: 'error', m: '终端视图不可用：node-pty 未加载（装好构建工具后 npm rebuild node-pty，或用 PIWEB_NO_PTY=1 明确禁用）。对话视图不受影响。' }));
+    ws.send(JSON.stringify({ t: 'error', m: '终端视图不可用：node-pty 未加载（装好构建工具后 npm rebuild node-pty，或用 PITETHER_NO_PTY=1 明确禁用）。对话视图不受影响。' }));
     ws.close();
     return;
   }
@@ -876,7 +876,7 @@ wss.on('connection', (ws, req, url) => {
     if (pingTimer) clearInterval(pingTimer);
     try { term.kill(); } catch { /* already gone */ }   // kills the tmux CLIENT only -> detach
     if (reason !== 'term-exit' && ws.readyState === ws.OPEN) { try { ws.close(); } catch {} }
-    console.log(`[pi-web] ws detached from ${session} (${reason}) — tmux session kept alive`);
+    console.log(`[pi-tether] ws detached from ${session} (${reason}) — tmux session kept alive`);
   };
 
   term.onData((chunk) => { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ t: 'o', d: chunk })); });
@@ -905,14 +905,14 @@ wss.on('connection', (ws, req, url) => {
 
   ws.on('close', () => cleanup('ws-close'));
   ws.on('error', () => cleanup('ws-error'));
-  console.log(`[pi-web] ws attached to ${session} ${cols}x${rows}`);
+  console.log(`[pi-tether] ws attached to ${session} ${cols}x${rows}`);
 });
 
 /* ------------------------------------------------------------------ boot */
 
 async function tailscaleIps(waitMs) {
   if (!HAS_TAILSCALE) {
-    console.warn('[pi-web] WARN: HOST 里写了 tailscale，但本机没有 tailscale 命令，跳过该地址');
+    console.warn('[pi-tether] WARN: HOST 里写了 tailscale，但本机没有 tailscale 命令，跳过该地址');
     return [];
   }
   const deadline = Date.now() + waitMs;
@@ -921,12 +921,12 @@ async function tailscaleIps(waitMs) {
       const ips = execFileSync('tailscale', ['ip', '-4'], { encoding: 'utf8', timeout: 5000 })
         .split('\n').map((s) => s.trim()).filter(Boolean);
       if (ips.length) {
-        if (attempt > 1) console.log(`[pi-web] tailscale 就绪（${attempt} 次尝试）: ${ips.join(', ')}`);
+        if (attempt > 1) console.log(`[pi-tether] tailscale 就绪（${attempt} 次尝试）: ${ips.join(', ')}`);
         return ips;
       }
     } catch { /* socket/daemon not up yet */ }
     if (Date.now() >= deadline) return [];
-    if (attempt === 1) console.log(`[pi-web] 等待 tailscale 分配 IPv4（最多 ${Math.round(waitMs / 1000)}s）…`);
+    if (attempt === 1) console.log(`[pi-tether] 等待 tailscale 分配 IPv4（最多 ${Math.round(waitMs / 1000)}s）…`);
     await new Promise((r) => setTimeout(r, 1500));
   }
 }
@@ -949,14 +949,14 @@ const bindHost = (host) => new Promise((resolve) => {
   srv.once('error', onErr);
   srv.listen(PORT, host, () => {
     srv.off('error', onErr);
-    srv.on('error', (err) => console.error(`[pi-web] ${hostUrl(host)} 错误: ${err.code || err.message}`));
+    srv.on('error', (err) => console.error(`[pi-tether] ${hostUrl(host)} 错误: ${err.code || err.message}`));
     listeners.push(srv);
     boundHosts.add(host);
-    console.log(`[pi-web] listening on ${hostUrl(host)}`);
+    console.log(`[pi-tether] listening on ${hostUrl(host)}`);
     const loopback = host.startsWith('127.') || host === '::1' || host === 'localhost';
-    if (!loopback && !USE_TLS && process.env.PIWEB_ALLOW_PLAINTEXT !== '1') {
-      console.warn(`[pi-web] ⚠ ${hostUrl(host)} 是明文 HTTP：只应经 Tailscale/WireGuard 等私有网络访问。`);
-      console.warn('           公网或不可信 LAN 请配置 PIWEB_TLS_CERT / PIWEB_TLS_KEY，或设 PIWEB_ALLOW_PLAINTEXT=1 关闭此提醒。');
+    if (!loopback && !USE_TLS && process.env.PITETHER_ALLOW_PLAINTEXT !== '1') {
+      console.warn(`[pi-tether] ⚠ ${hostUrl(host)} 是明文 HTTP：只应经 Tailscale/WireGuard 等私有网络访问。`);
+      console.warn('           公网或不可信 LAN 请配置 PITETHER_TLS_CERT / PITETHER_TLS_KEY，或设 PITETHER_ALLOW_PLAINTEXT=1 关闭此提醒。');
     }
     resolve({ ok: true, srv });
   });
@@ -967,10 +967,10 @@ async function bindWithRetry(host, attempts, gapMs) {
     const r = await bindHost(host);
     if (r.ok) return true;
     if (r.err.code !== 'EADDRNOTAVAIL') {
-      console.error(`[pi-web] 监听 ${hostUrl(host)} 失败: ${r.err.code || r.err.message}`);
+      console.error(`[pi-tether] 监听 ${hostUrl(host)} 失败: ${r.err.code || r.err.message}`);
       return false;
     }
-    if (i === 1 && attempts > 1) console.log(`[pi-web] 等待 ${host} 出现在接口上…`);
+    if (i === 1 && attempts > 1) console.log(`[pi-tether] 等待 ${host} 出现在接口上…`);
     if (i < attempts) await sleepMs(gapMs);
   }
   pendingHosts.add(host);   // healed by the retry timer below
@@ -996,7 +996,7 @@ function startBindHealer() {
     if (tailscalePending) {
       const ips = tailscaleIpOnce().filter((ip) => !boundHosts.has(ip));
       if (ips.length) {
-        console.log(`[pi-web] tailscale 迟到了 ${Math.round((Date.now() - healStart) / 1000)}s，补绑 ${ips.join(', ')}`);
+        console.log(`[pi-tether] tailscale 迟到了 ${Math.round((Date.now() - healStart) / 1000)}s，补绑 ${ips.join(', ')}`);
         tailscalePending = false;
         for (const ip of ips) await bindWithRetry(ip, 3, 1000);
       }
@@ -1032,7 +1032,7 @@ const healStart = Date.now();
 
   for (const host of hosts) await bindWithRetry(host, host === '127.0.0.1' ? 1 : 20, 1500);
   if (!listeners.length) {
-    console.error('[pi-web] 没有任何监听地址，退出');
+    console.error('[pi-tether] 没有任何监听地址，退出');
     process.exit(1);
   }
   // `tailscale` was requested but resolved to nothing (or its IP is still not
@@ -1042,22 +1042,22 @@ const healStart = Date.now();
 }
 
 setTimeout(() => {
-  console.log(`[pi-web] root sandbox: ${ROOT} · auth: WEB_PASS (${WEB_PASS.length} chars) + HttpOnly cookie`);
-  console.log(`[pi-web] pi sessions: ${SESSIONS_ROOT} · shell: ${SHELL_BIN} · pty: ${pty ? 'on' : 'OFF'} · tls: ${USE_TLS ? 'on' : 'off'}`);
+  console.log(`[pi-tether] root sandbox: ${ROOT} · auth: WEB_PASS (${WEB_PASS.length} chars) + HttpOnly cookie`);
+  console.log(`[pi-tether] pi sessions: ${SESSIONS_ROOT} · shell: ${SHELL_BIN} · pty: ${pty ? 'on' : 'OFF'} · tls: ${USE_TLS ? 'on' : 'off'}`);
   if (!PI_VERSION) {
-    console.warn('[pi-web] WARN: `pi --version` 不可用 —— 对话功能会失败（先 npm i -g @earendil-works/pi-coding-agent）');
+    console.warn('[pi-tether] WARN: `pi --version` 不可用 —— 对话功能会失败（先 npm i -g @earendil-works/pi-coding-agent）');
   } else if (PI_VERSION !== VERIFIED_PI) {
-    console.warn(`[pi-web] NOTE: pi ${PI_VERSION} 与已验证版本 ${VERIFIED_PI} 不同：`);
+    console.warn(`[pi-tether] NOTE: pi ${PI_VERSION} 与已验证版本 ${VERIFIED_PI} 不同：`);
     console.warn('           RPC 字段若有变动，可能表现为思考/工具结果不显示。遇到异常先 npm run selftest。');
   } else {
-    console.log(`[pi-web] pi ${PI_VERSION} (已验证)`);
+    console.log(`[pi-tether] pi ${PI_VERSION} (已验证)`);
   }
-  try { const s = tmuxList(); console.log(`[pi-web] live pi sessions at boot: ${s.length}`); } catch {}
+  try { const s = tmuxList(); console.log(`[pi-tether] live pi sessions at boot: ${s.length}`); } catch {}
 }, 200);
 
 for (const sig of ['SIGINT', 'SIGTERM']) {
   process.on(sig, () => {
-    console.log(`\n[pi-web] ${sig} — shutting down (tmux sessions / chat processes untouched)`);
+    console.log(`\n[pi-tether] ${sig} — shutting down (tmux sessions / chat processes untouched)`);
     for (const s of listeners) s.close();
     setTimeout(() => process.exit(0), 300);
     setTimeout(() => process.exit(0), 1500);

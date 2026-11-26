@@ -1,16 +1,16 @@
-# 60 秒跑起来
+# Quickstart
 
 ```bash
-git clone <this-repo> pi-web && cd pi-web           # 需要 node >= 20 / tmux / pi
+git clone https://github.com/concaveCat/pi-tether.git && cd pi-tether   # needs node >= 20, tmux, pi
 npm install && cp .env.example .env && chmod 600 .env
 sed -i "s|^WEB_PASS=.*|WEB_PASS=$(node -e 'console.log(require("crypto").randomBytes(12).toString("base64url"))')|" .env
-./start.sh start && ./start.sh status               # 打印监听地址
+./start.sh start && ./start.sh status                                  # prints the bound addresses
 ```
 
-浏览器打开 `http://127.0.0.1:8765`，用 `.env` 里的 `WEB_PASS` 登录。
+Open `http://127.0.0.1:8765` and log in with the `WEB_PASS` from `.env`.
 
-- 手机访问：`.env` 里改成 `HOST=127.0.0.1,tailscale`（需装 tailscale），然后在手机上访问 `http://<tailnet-ip>:8765`。
-- 自检：`node selftest.mjs`（45 项）。会话归属回归：`node tests/ownership.mjs`。
-- 排错先看 `GET /api/me`：它直接告诉你当前生效的 `root` / `sessionsRoot` / `shell` / `pty` / `tls` / `piVersion`。
+- Phone access: set `HOST=127.0.0.1,tailscale` in `.env` (needs the `tailscale` CLI), then open `http://<tailnet-ip>:8765`.
+- Self-test: `node selftest.mjs` (45 checks). Ownership regression: `node tests/ownership.mjs`.
+- Debugging starts at `GET /api/me` — it reports the effective `root`, `sessionsRoot`, `shell`, `pty`, `tls`, `piVersion`.
 
-完整说明见 [`../README.md`](../README.md)。
+Full documentation: [`../README.md`](../README.md).

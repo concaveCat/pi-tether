@@ -5,7 +5,7 @@
  *   node tests/ownership.mjs                 # uses PORT from .env (default 8765)
  *   B=http://127.0.0.1:8765 P=<password> node tests/ownership.mjs
  *
- * Creates two chats in a scratch directory (default /tmp/piweb-own-test) and
+ * Creates two chats in a scratch directory (default /tmp/pitether-own-test) and
  * deletes them afterwards. Takes ~3 minutes because the foreign-writer check
  * needs an idle window before it may fire.
  */
@@ -22,7 +22,7 @@ const PORT = readEnv('PORT', '8765');
 const BASE = process.env.B || `http://127.0.0.1:${PORT}`;
 const PASS = process.env.P || readEnv('WEB_PASS');
 const AUTH = 'Basic ' + Buffer.from(`root:${PASS}`).toString('base64');
-const DIR = process.env.DIR || 'piweb-own-test';   // 相对服务端的沙箱根
+const DIR = process.env.DIR || 'pitether-own-test';   // 相对服务端的沙箱根
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const api = async (p, o = {}) => {
@@ -52,7 +52,7 @@ const waitFor = async (source, pred, ms) => {
   }
 };
 
-// 沙箱根由服务端决定（PIWEB_ROOT 或 $HOME），测试目录建在它下面
+// 沙箱根由服务端决定（PITETHER_ROOT 或 $HOME），测试目录建在它下面
 const ME = await api('/api/me');
 const ABS = path.join(ME.root, DIR);
 fs.mkdirSync(ABS, { recursive: true });
