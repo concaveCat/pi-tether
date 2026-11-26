@@ -187,7 +187,8 @@ export class Chat extends EventEmitter {
     /** undefined = adopt the newest session for this cwd, false = force a new one, string = exact file */
     this.resumeSpec = resume;
     this.fileSizeSeen = 0;
-    this.foreignWarned = false;
+    this.sizeFile = null;          // 基线记的是哪个文件
+    this.foreignWarnAt = 0;        // 上次告警时间（冷却用）
     this.lastEventAt = Date.now();
     this.idleWatch = null;
     this.items = [];
@@ -361,29 +362,6 @@ export class Chat extends EventEmitter {
     return listSessions(this.dir, 80);
   }
 
-  /** /resume: switch the live process to another session file and re-render it */
-  async switchSession(sessionPath) {
-    if (!isSessionPath(sessionPath)) throw new Error('路径不在 pi 会话目录内');
-    let sizeMb = 0;
-    try { sizeMb = fs.statSync(sessionPath).size / 1048576; } catch { /* ignore */ }
-    let res;
-    try {
-      res = await this.send({ type: 'switch_session', sessionPath }, 120000);
-    } catch (err) {
-      // pi stays usable after a stuck switch (verified), it just does not switch
-      throw new Error(`切换超时${sizeMb ? `（会话 ${sizeMb.toFixed(1)}M，可能过大）` : ''}；本会话未受影响，可在终端视图用 /resume`);
-    }
-    if (res?.data?.cancelled) throw new Error('切换被扩展取消');
-    this.lastSessionPath = sessionPath;
-    this.claimed = null;
-    this.foreignWarned = false;
-    await this.seedFromSession();
-    await this.refreshState();
-    this.noteFileSize();
-    this.refreshPanel(true);
-    return true;
-  }
-
   close() {
     if (this.panelTimer) { clearInterval(this.panelTimer); this.panelTimer = null; }
     if (this.idleWatch) { clearInterval(this.idleWatch); this.idleWatch = null; }
@@ -443,6 +421,11 @@ export class Chat extends EventEmitter {
     this.notice(`已切换会话：${path.basename(abs)}`);
     this.emit('items', this.items);
     await this.refreshState();
+    // 新文件 = 新基线：否则旧的 fileSizeSeen 会把已存在的内容当成"外部新增"
+    this.claimed = null;
+    this.foreignWarnAt = 0;
+    this.switchAt = Date.now();    // 切换后的宽限期起点
+    this.noteFileSize();
     this.refreshPanel(true);
     return { switched: true, sessionFile: abs, messages: this.state.messageCount };
   }
@@ -714,8 +697,14 @@ export class Chat extends EventEmitter {
   ingestMessage(msg, { quiet = false } = {}) {
     if (!msg || !msg.role) return;
     if (msg.role === 'user') {
-      if (quiet) this.push({ id: newId('u'), role: 'user', text: clip(textOf(msg.content), 20000), ts: msg.timestamp || Date.now() });
-      else this.push({ id: newId('u'), role: 'user', text: clip(textOf(msg.content), 20000), ts: msg.timestamp || Date.now() });
+      const images = (Array.isArray(msg.content) ? msg.content : [])
+        .filter((b) => b && b.type === 'image' && b.data)
+        .slice(0, 6)
+        .map((b) => ({ mimeType: b.mimeType || 'image/png', data: clip(b.data, 4 * 1024 * 1024) }));
+      this.push({
+        id: newId('u'), role: 'user', text: clip(textOf(msg.content), 20000),
+        ts: msg.timestamp || Date.now(), ...(images.length ? { images } : {}),
+      });
       return;
     }
     if (msg.role === 'assistant') {
@@ -839,7 +828,10 @@ export class Chat extends EventEmitter {
         this.claimed = d.sessionFile;
         this.emit('session', d.sessionFile);
       }
-      if (d.sessionFile && !this.state.streaming) this.noteFileSize(d.sessionFile);
+      // 只在"换到另一个文件"时取基线；每轮都重取会把外部追加当成自己的写入
+      if (d.sessionFile && !this.state.streaming && d.sessionFile !== this.sizeFile) {
+        this.noteFileSize(d.sessionFile);
+      }
     } catch { /* process may be gone */ }
     this.emit('state', this.publicState());
   }
@@ -849,7 +841,7 @@ export class Chat extends EventEmitter {
   /** remember how big our own session file is right now (we are the last writer) */
   noteFileSize(file = this.state.sessionFile) {
     if (!file) return;
-    try { this.fileSizeSeen = fs.statSync(file).size; } catch { /* not written yet */ }
+    try { this.fileSizeSeen = fs.statSync(file).size; this.sizeFile = file; } catch { /* not written yet */ }
   }
 
   /**
@@ -866,7 +858,10 @@ export class Chat extends EventEmitter {
     this.idleWatch = setInterval(() => {
       const file = this.state.sessionFile;
       if (!file || !this.state.alive) return;
-      if (this.state.streaming || this.booting || Date.now() - this.lastEventAt < 60000) { suspects = 0; return; }
+      const now = Date.now();
+      // 静置时空转；刚切过会话的前 90s 也别吵（pi 自己会补记一条）
+      if (this.state.streaming || this.booting || now - this.lastEventAt < 60000
+          || now - (this.switchAt || 0) < 90000) { suspects = 0; return; }
       let size = 0;
       try { size = fs.statSync(file).size; } catch { return; }
       if (size <= this.fileSizeSeen + 32) {
@@ -887,8 +882,9 @@ export class Chat extends EventEmitter {
       } catch { return; }
       if (foreignMessages === 0) { suspects = 0; return; }
       suspects += 1;
-      if (suspects >= 2 && !this.foreignWarned) {
-        this.foreignWarned = true;
+      if (suspects >= 2 && Date.now() - this.foreignWarnAt > 10 * 60 * 1000) {
+        this.foreignWarnAt = Date.now();
+        this.fileSizeSeen = size;      // 已计入告警的字节不再重复计数
         this.notice(`另一进程也在写这个会话（${path.basename(file)}）：继续会在 JSONL 里分叉，另一支会被丢弃。`, 'error');
         this.emit('foreign', file);
       }
@@ -898,8 +894,12 @@ export class Chat extends EventEmitter {
 
   /* ------------------------------------------------------------- commands */
 
-  async prompt(text) {
-    const res = await this.send({ type: 'prompt', message: text }, 60000);
+  /** text + optional images ([{type:'image', data, mimeType}], pi's ImageContent) */
+  async prompt(text, images) {
+    const payload = { type: 'prompt', message: text };
+    if (Array.isArray(images) && images.length) payload.images = images;
+    if (this.state.streaming) payload.streamingBehavior = 'steer';
+    const res = await this.send(payload, 120000);
     return res?.data?.disposition || 'started';
   }
 

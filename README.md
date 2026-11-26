@@ -55,6 +55,7 @@ $EDITOR .env                    # 至少改 WEB_PASS；HOST 默认只绑 127.0.0
 ./start.sh logs                 # 跟踪日志
 ./start.sh stop                 # 只停 web 服务，pi 会话不受影响
 node selftest.mjs               # 45 项端到端自检（会临时起会话并自动清理）
+node tests/ownership.mjs        # 会话归属回归（同 .jsonl 单写者，约 3 分钟）
 ```
 
 手动前台运行：`WEB_PASS='...' node server.mjs`（未设 `WEB_PASS` 会拒绝启动）。
@@ -96,6 +97,17 @@ node selftest.mjs               # 45 项端到端自检（会临时起会话并�
 | 状态 | 顶栏显示当前目录、模型、思考档位；⚠ 长按「思考」可看扩展状态（context%） |
 
 底部只有一个输入框：`Enter` 发送、`Shift+Enter` 换行，生成中按钮变成 `■` 停止。
+
+**发图** — 输入框左边的 `＋` 选图（或桌面端直接粘贴 / 拖进来），最多 6 张、单张 ≤8MB，
+支持 png/jpeg/webp/gif。图片随 prompt 一起发给模型（pi 的 `ImageContent`），
+在 transcript 里按原样回显，`/resume` 回放历史也会显示。只发图不写字也可以。
+
+**后台完成通知** — 页面切到后台时，这一轮跑完会把标题改成 `(1) pi-web` 并发一条系统通知
+（首次发送时申请权限；iOS 需要浏览器支持通知）。回到页面自动清零。
+
+**加到主屏幕** — 带 `manifest.webmanifest` + 192/512 图标，iOS 用 `apple-mobile-web-app-capable`
+即可以独立窗口（无地址栏）打开。注意：Android/Chrome 的"安装"按钮要求页面是 **HTTPS**
+（配 `PIWEB_TLS_CERT/KEY` 或走 `tailscale cert`）；iOS Safari 的"添加到主屏幕"不受此限制。
 
 **`/` 命令** — 在输入框开头敲 `/` 就弹出命令面板（↑↓ 选、`Tab`/`Enter` 确认、`Esc` 关）：
 

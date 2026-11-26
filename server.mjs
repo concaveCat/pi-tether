@@ -253,7 +253,7 @@ const app = express();
 app.disable('x-powered-by');
 app.set('etag', false);
 app.use(express.urlencoded({ extended: false, limit: '16kb' }));
-app.use(express.json({ limit: '64kb' }));
+app.use(express.json({ limit: '24mb' }));   // 附件走 WS，这里给浏览器重发/粘贴留余量
 
 const noCache = (res, extra = {}) => res.set({ 'Cache-Control': 'no-store', ...extra });
 
@@ -284,6 +284,13 @@ app.post('/login', (req, res) => {
 app.get('/logout', (req, res) => { res.clearCookie(COOKIE, { path: '/' }); res.redirect('/login'); });
 
 // ---- gate everything below ----
+// PWA 图标与 manifest 免鉴权：加到主屏时系统抓图不带 cookie
+const PUBLIC_DIR = path.join(__dirname, 'public');
+for (const f of ['/manifest.webmanifest', '/icon-192.png', '/icon-512.png', '/icon-512-maskable.png', '/favicon.ico']) {
+  app.get(f, (req, res) => res.sendFile(path.join(PUBLIC_DIR, f.replace(/^\//, '')), (err) => {
+    if (err && !res.headersSent) res.status(404).end();
+  }));
+}
 app.use((req, res, next) => {
   if (isAuthed(req)) return next();
   if (req.path.startsWith('/api/')) {
@@ -301,7 +308,7 @@ vendor('/vendor/xterm.js', '@xterm/xterm/lib/xterm.js', 'application/javascript'
 vendor('/vendor/xterm.css', '@xterm/xterm/css/xterm.css', 'text/css');
 vendor('/vendor/addon-fit.js', '@xterm/addon-fit/lib/addon-fit.js', 'application/javascript');
 
-app.use(express.static(path.join(__dirname, 'public'), { index: 'index.html', etag: false }));
+app.use(express.static(PUBLIC_DIR, { index: 'index.html', etag: false }));
 
 /* -------------------------------------------------------------- file APIs */
 
@@ -427,6 +434,27 @@ app.delete('/api/sessions/:name', (req, res, next) => {
 /* -------------------------------------------------------------- chat APIs */
 
 const chats = new Map();                 // name -> Chat (one long-lived pi --mode rpc per chat)
+
+/** attachment guard: base64 images only, bounded count/size */
+const IMAGE_MIME = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
+const IMAGE_MAX_BYTES = 8 * 1024 * 1024;
+const IMAGE_MAX_COUNT = 6;
+
+function normalizeImages(input) {
+  if (!Array.isArray(input)) return [];
+  const out = [];
+  for (const raw of input.slice(0, IMAGE_MAX_COUNT)) {
+    if (!raw || typeof raw !== 'object') continue;
+    const mimeType = String(raw.mimeType || '').toLowerCase();
+    if (!IMAGE_MIME.has(mimeType)) continue;
+    let data = String(raw.data || '');
+    if (data.startsWith('data:')) data = data.slice(data.indexOf(',') + 1);
+    if (!data || data.length > IMAGE_MAX_BYTES * 1.4) continue;   // base64 is ~1.33x
+    if (!/^[A-Za-z0-9+/=\s]+$/.test(data)) continue;
+    out.push({ type: 'image', data: data.replace(/\s+/g, ''), mimeType });
+  }
+  return out;
+}
 
 /**
  * Session-file ownership. pi itself takes no lock on a session .jsonl, so two
@@ -619,7 +647,7 @@ app.use((err, req, res, next) => {
 /* ------------------------------------------------------------------- ws */
 
 const wss = new WebSocketServer({ noServer: true, perMessageDeflate: false });
-const wssChat = new WebSocketServer({ noServer: true, perMessageDeflate: false });
+const wssChat = new WebSocketServer({ noServer: true, perMessageDeflate: false, maxPayload: 12 * 1024 * 1024 });
 
 /** Reject a WebSocket upgrade with a well-formed, immediately-closed HTTP response. */
 function rejectUpgrade(socket, code, reason) {
@@ -689,10 +717,10 @@ wssChat.on('connection', (ws, req, chat) => {
       switch (msg.t) {
         case 'prompt': {
           const text = String(msg.text || '').slice(0, 200000);
-          if (!text.trim()) return ack(false, { error: 'empty' });
-          const streaming = chat.state.streaming;
-          const res = await chat.send({ type: 'prompt', message: text, ...(streaming ? { streamingBehavior: 'steer' } : {}) }, 60000);
-          return ack(true, { disposition: res?.data?.disposition });
+          const images = normalizeImages(msg.images);
+          if (!text.trim() && !images.length) return ack(false, { error: 'empty' });
+          const disposition = await chat.prompt(text, images);
+          return ack(true, { disposition });
         }
         case 'abort':
           await chat.abort();

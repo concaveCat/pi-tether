@@ -11,7 +11,8 @@
     "start": "node server.mjs",
     "service": "./start.sh",
     "selftest": "node selftest.mjs",
-    "check": "node --check server.mjs && node --check chat.mjs && node --check panel.mjs && node --check selftest.mjs"
+    "test:ownership": "node tests/ownership.mjs",
+    "check": "node --check server.mjs && node --check chat.mjs && node --check panel.mjs && node --check selftest.mjs && node --check tests/ownership.mjs"
   },
   "engines": {
     "node": ">=20.0.0"
@@ -37,7 +38,8 @@
     "selftest.mjs",
     "README.md",
     "LICENSE",
-    ".env.example"
+    ".env.example",
+    "tests/"
   ],
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",

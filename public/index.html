@@ -5,6 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no">
 <meta name="theme-color" content="#0b0e12">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="pi">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<link rel="icon" href="/icon-192.png">
 <title>pi-web</title>
 <style>
   :root {
@@ -310,6 +316,22 @@
     z-index: 90; opacity: 0; transition: opacity .18s; pointer-events: none;
   }
   .toast.on { opacity: 1; }
+  /* ---------------- attachments (images) ---------------- */
+  .attach-bar { flex: 0 0 auto; display: flex; gap: 8px; overflow-x: auto; padding: 0 14px; }
+  .attach-bar[hidden] { display: none; }
+  .thumb { position: relative; flex: 0 0 auto; padding: 6px 0; }
+  .thumb img { height: 54px; width: auto; max-width: 110px; object-fit: cover; display: block; }
+  .thumb button {
+    position: absolute; top: 2px; right: 2px; font-family: var(--mono); font-size: 10px;
+    background: var(--bg); border: 1px solid var(--hair); color: var(--dim); padding: 0 4px; line-height: 14px;
+  }
+  .msg .imgs { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 0 0; }
+  .msg .imgs img { max-width: 100%; max-height: 320px; display: block; border: 1px solid var(--hair); }
+  .composer .clip {
+    flex: 0 0 auto; width: 30px; height: 30px; display: grid; place-items: center;
+    color: var(--faint); font-family: var(--mono); font-size: 15px; align-self: flex-end; margin-bottom: 6px;
+  }
+  .composer .clip[disabled] { opacity: .35; }
 </style>
 </head>
 <body>
@@ -349,10 +371,13 @@
         </summary>
         <div class="drawer-body" id="drawerBody"></div>
       </details>
+      <div class="attach-bar" id="attachBar" hidden></div>
       <div class="slash" id="slashMenu" hidden>
         <div id="slashList"></div>
       </div>
       <div class="composer">
+        <button class="clip" id="clipBtn" title="发送图片">＋</button>
+        <input type="file" id="fileInput" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
         <textarea id="chatInput" rows="1" placeholder="给 pi 发消息…（/ 打开命令）"></textarea>
         <button class="send-btn stop" id="chatStop" hidden>■</button>
         <button class="send-btn" id="chatSend">↑</button>
@@ -813,6 +838,48 @@
     ws.onerror = () => {};
   }
 
+  /* ---------------- completion notifications ---------------- */
+
+  const notify = { wasStreaming: false, unread: 0, asked: false };
+
+  function askNotifyPermission() {
+    if (notify.asked || !('Notification' in window) || Notification.permission !== 'default') return;
+    notify.asked = true;
+    try { Notification.requestPermission(); } catch { /* older Safari: callback form only */ }
+  }
+
+  function paintTitle() {
+    const base = 'pi-web';
+    document.title = notify.unread ? `(${notify.unread}) ${base}` : base;
+  }
+
+  function clearUnread() {
+    if (!notify.unread) return;
+    notify.unread = 0;
+    paintTitle();
+  }
+
+  /** streaming true → false while the tab is hidden: tell the user, quietly. */
+  function onStreamingEdge(streaming) {
+    const was = notify.wasStreaming;
+    notify.wasStreaming = streaming;
+    if (streaming || !was) return;
+    if (!document.hidden) return;                 // they are looking at it
+    notify.unread += 1;
+    paintTitle();
+    try {
+      if ('Notification' in window && Notification.permission === 'granted') {
+        const last = [...state.chat.items.values()].reverse().find((i) => i.role === 'assistant');
+        const text = plain((last?.blocks || []).map((b) => b.text || '').join(' ')).slice(0, 120) || '这一轮已经跑完';
+        const n = new Notification('pi-web · 完成', { body: text, tag: 'pi-web-done', silent: false, icon: '/icon-192.png' });
+        n.onclick = () => { window.focus(); clearUnread(); n.close(); };
+      }
+    } catch { /* notifications blocked */ }
+  }
+
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) clearUnread(); });
+  window.addEventListener('focus', clearUnread);
+
   function renderChatHead() {
     const info = state.chat.info || {};
     $('chatPath').innerHTML = state.chat.name
@@ -822,6 +889,7 @@
     $('chipThink').textContent = info.thinkingLevel ? '思考 ' + info.thinkingLevel : '思考';
     if (info.statusLine) $('chipThink').title = info.statusLine;
     const streaming = !!info.streaming;
+    onStreamingEdge(streaming);
     $('chatStop').hidden = !streaming;
     $('chatSend').hidden = streaming;
     $('chatSend').disabled = !state.chat.ws || state.chat.ws.readyState !== 1;
@@ -839,12 +907,83 @@
     }
   }
 
-  /* ---------------- slash commands ---------------- */
-
   /* pi's built-in TUI commands (/resume, /model, …) never reach RPC mode, so
      pi-web implements the useful ones itself; everything else in
      `get_commands` (extensions, prompt templates, skills) is forwarded verbatim
      through `prompt`, where pi expands it. */
+  /* ---------------- attachments (images) ---------------- */
+
+  const ATTACH_MAX = 6;
+  const ATTACH_MAX_BYTES = 8 * 1024 * 1024;
+  const attach = { items: [] };          // { id, mimeType, data(base64), name, url }
+
+  function renderAttach() {
+    const bar = $('attachBar');
+    if (!attach.items.length) { bar.hidden = true; bar.innerHTML = ''; return; }
+    bar.hidden = false;
+    bar.innerHTML = attach.items.map((a) => (
+      `<div class="thumb" data-id="${a.id}"><img src="${a.url}" alt="${esc(a.name || '')}">` +
+      `<button data-del="${a.id}" title="移除">×</button></div>`
+    )).join('');
+    for (const b of bar.querySelectorAll('[data-del]')) {
+      b.addEventListener('pointerdown', (ev) => {
+        ev.preventDefault();
+        const i = attach.items.findIndex((x) => x.id === b.dataset.del);
+        if (i >= 0) { URL.revokeObjectURL(attach.items[i].url); attach.items.splice(i, 1); renderAttach(); }
+      });
+    }
+  }
+
+  /** read a File → { mimeType, data } (base64 without the data: prefix) */
+  function readImage(file) {
+    return new Promise((resolve, reject) => {
+      if (!/^image\/(png|jpeg|webp|gif)$/.test(file.type)) return reject(new Error('只支持 png/jpeg/webp/gif'));
+      if (file.size > ATTACH_MAX_BYTES) return reject(new Error(`单张超过 ${ATTACH_MAX_BYTES / 1048576}MB`));
+      const fr = new FileReader();
+      fr.onerror = () => reject(new Error('读取失败'));
+      fr.onload = () => {
+        const s = String(fr.result || '');
+        resolve({ mimeType: file.type, data: s.slice(s.indexOf(',') + 1), name: file.name, url: URL.createObjectURL(file) });
+      };
+      fr.readAsDataURL(file);
+    });
+  }
+
+  async function addFiles(files) {
+    for (const f of [...files]) {
+      if (attach.items.length >= ATTACH_MAX) { toast(`最多 ${ATTACH_MAX} 张`); break; }
+      try {
+        const img = await readImage(f);
+        attach.items.push({ id: 'at' + Math.random().toString(36).slice(2, 8), ...img });
+      } catch (err) { toast('图片未添加：' + err.message); }
+    }
+    renderAttach();
+  }
+
+  function clearAttach() {
+    for (const a of attach.items) URL.revokeObjectURL(a.url);
+    attach.items = [];
+    renderAttach();
+  }
+
+  $('clipBtn').addEventListener('pointerdown', (ev) => { ev.preventDefault(); $('fileInput').click(); });
+  $('fileInput').addEventListener('change', async (e) => { await addFiles(e.target.files || []); e.target.value = ''; });
+  // 桌面端粘贴截图
+  $('chatInput').addEventListener('paste', (e) => {
+    const files = [...(e.clipboardData?.files || [])].filter((f) => f.type.startsWith('image/'));
+    if (!files.length) return;
+    e.preventDefault();
+    addFiles(files);
+  });
+  // 拖拽（桌面端）
+  document.addEventListener('dragover', (e) => { if (e.dataTransfer?.types?.includes('Files')) e.preventDefault(); });
+  document.addEventListener('drop', (e) => {
+    const files = [...(e.dataTransfer?.files || [])].filter((f) => f.type.startsWith('image/'));
+    if (!files.length) return;
+    e.preventDefault();
+    addFiles(files);
+  });
+
   const BUILTINS = [
     { name: 'resume', desc: '恢复另一个会话（选择会话文件）' },
     { name: 'model', desc: '切换模型', arg: '[名字]' },
@@ -1364,7 +1503,11 @@
     if (item.role === 'user') {
       wrap.className = 'msg user';
       wrap.dataset.role = 'user';
-      wrap.innerHTML = `<span class="who">你</span><div class="txt">${md(item.text || '')}</div>`;
+      const imgs = (item.images || []).map((im) => (
+        `<img src="data:${esc(im.mimeType || 'image/png')};base64,${im.data}" alt="" loading="lazy">`
+      )).join('');
+      wrap.innerHTML = `<span class="who">你</span><div class="txt">${md(item.text || '')}</div>`
+        + (imgs ? `<div class="imgs">${imgs}</div>` : '');
       return wrap;
     }
     if (item.role === 'notice') {
@@ -1514,7 +1657,10 @@
   async function sendChat() {
     const t = $('chatInput');
     const text = t.value.trim();
-    if (!text) return;
+    if (!text) {                                   // 只发图也能发
+      if (attach.items.length) await sendText('（图片）');
+      return;
+    }
     // bare built-in commands must never be sent to the model as prose
     const bare = /^\/([a-z][\w:-]*)(?:\s+([\s\S]*))?$/.exec(text);
     if (bare && BUILTIN_BY_NAME.has(bare[1])) {
@@ -1530,12 +1676,15 @@
   async function sendText(text) {
     if (!state.chat.name) { toast('先在「文件」里选一个目录开始对话'); return; }
     if (!state.chat.ws || state.chat.ws.readyState !== 1) { toast('连接中，请稍候…'); connectChat(); return; }
-    // 只有真的发出去了才清空输入框（也清掉斜杠面板状态）
+    // 只有真的发出去了才清空输入框（同时清掉斜杠面板状态与附件）
     const t = $('chatInput');
     if (t.value.trim() === text) { t.value = ''; autosize(); }
+    askNotifyPermission();
+    const images = attach.items.map((a) => ({ type: 'image', mimeType: a.mimeType, data: a.data }));
+    clearAttach();
     closeSlash();
     state.chat.autoScroll = true;
-    chatSendMsg({ t: 'prompt', text });
+    chatSendMsg({ t: 'prompt', text, ...(images.length ? { images } : {}) });
   }
   $('chatSend').onclick = sendChat;
   $('chatStop').onclick = () => { chatSendMsg({ t: 'abort' }); toast('已请求停止'); };
