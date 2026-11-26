@@ -37,6 +37,18 @@ if ! command -v pi >/dev/null 2>&1; then
   echo "[pi-web] 警告：PATH 里没有 pi，对话功能会失败。先 npm i -g @earendil-works/pi-coding-agent" >&2
 fi
 
+# systemd 单元是全局单例（/etc/systemd/system/pi-web.service）：只有当它的
+# WorkingDirectory 就是本目录时才把本目录的实例当成"由 systemd 运行"。
+unit_matches_dir() {
+  [ -f "$UNIT" ] || return 1
+  local wd real_wd real_dir
+  wd=$(systemctl show pi-web -p WorkingDirectory --value 2>/dev/null)
+  [ -n "$wd" ] || return 1
+  real_wd=$(cd "$wd" 2>/dev/null && pwd -P) || return 1
+  real_dir=$(cd "$DIR" && pwd -P)
+  [ "$real_wd" = "$real_dir" ]
+}
+
 mkdir -p "$LOGD"
 
 # ---------- env ----------
@@ -83,8 +95,8 @@ pid_alive() {
 do_start() {
   if pid_alive; then echo "[pi-web] 已在运行 (pid $(cat "$DIR/.pid"))"; return 0; fi
 
-  # 装了 systemd 单元就一律走 systemd（开机自启与手工启动是同一条路径）
-  if command -v systemctl >/dev/null 2>&1 && systemctl cat pi-web >/dev/null 2>&1; then
+  # 本目录的实例是 systemd 托管时，start 也走 systemd（与开机自启同一条路径）
+  if command -v systemctl >/dev/null 2>&1 && unit_matches_dir; then
     systemctl start pi-web
     sleep 1
     if systemctl is-active --quiet pi-web; then
@@ -122,7 +134,7 @@ do_start() {
 
 do_stop() {
   local stopped=0
-  if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet pi-web 2>/dev/null; then
+  if command -v systemctl >/dev/null 2>&1 && unit_matches_dir && systemctl is-active --quiet pi-web 2>/dev/null; then
     systemctl stop pi-web && echo "[pi-web] systemd 服务已停止"
     stopped=1
   fi
@@ -142,7 +154,7 @@ do_stop() {
 do_status() {
   if pid_alive; then
     echo "[pi-web] 运行中 pid=$(cat "$DIR/.pid")  端口 $PORT"
-  elif command -v systemctl >/dev/null && systemctl is-active --quiet pi-web 2>/dev/null; then
+  elif command -v systemctl >/dev/null && unit_matches_dir && systemctl is-active --quiet pi-web 2>/dev/null; then
     echo "[pi-web] 运行中（systemd） 端口 $PORT"
   else
     echo "[pi-web] 未运行"
@@ -183,6 +195,9 @@ StandardError=append:$LOG
 [Install]
 WantedBy=multi-user.target
 EOF
+    if [ -f "$UNIT" ] && ! unit_matches_dir; then
+      echo "[pi-web] 注意：$UNIT 原本指向别的目录（$(systemctl show pi-web -p WorkingDirectory --value 2>/dev/null)），将被本目录覆盖" >&2
+    fi
     systemctl daemon-reload && systemctl enable --now pi-web
     echo "[pi-web] systemd 服务已安装并启动: systemctl status pi-web"
     echo "[pi-web] 服务 PATH: $SERVICE_PATH" ;;
