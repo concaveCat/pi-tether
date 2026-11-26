@@ -22,6 +22,21 @@ NODE_BIN="${NODE_BIN:-$(command -v node)}"
 SERVICE_PATH=$(printf '%s' "${PATH:-}" | tr ':' '\n' | grep -v -e '[[:space:]]' -e '^/mnt/' | awk 'NF && !seen[$0]++' | paste -sd: -)
 [ -n "$SERVICE_PATH" ] || SERVICE_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
+# ---------- preflight ----------
+if [ -z "${NODE_BIN:-}" ] || ! [ -x "$NODE_BIN" ]; then
+  echo "[pi-web] 错误：找不到 node（需要 >= 20）。若用 nvm，请在能跑 node 的 shell 里执行本脚本，" >&2
+  echo "         或显式指定：NODE_BIN=/path/to/node ./start.sh start" >&2
+  exit 1
+fi
+NODE_MAJOR=$("$NODE_BIN" -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)
+if [ "${NODE_MAJOR:-0}" -lt 20 ]; then
+  echo "[pi-web] 错误：node 版本过旧（$("$NODE_BIN" -v)，需要 >= 20）" >&2
+  exit 1
+fi
+if ! command -v pi >/dev/null 2>&1; then
+  echo "[pi-web] 警告：PATH 里没有 pi，对话功能会失败。先 npm i -g @earendil-works/pi-coding-agent" >&2
+fi
+
 mkdir -p "$LOGD"
 
 # ---------- env ----------
@@ -29,8 +44,15 @@ if [ ! -f "$ENVF" ]; then
   umask 077
   {
     echo "# pi-web 配置 —— 由 start.sh 首次生成，rm 掉即为重置"
-    echo "HOST=127.0.0.1,tailscale"
+    echo "# 默认只绑回环；要经 tailnet 访问改用：HOST=127.0.0.1,tailscale"
+    echo "# 记得只经 Tailscale / SSH 隧道 / 反代(TLS) 暴露，别直接开到公网。"
+    echo "HOST=127.0.0.1"
     echo "PORT=8765"
+    echo "#PIWEB_ROOT=$HOME"
+    echo "#PIWEB_SHELL=$(printf '%s' "${SHELL:-/bin/bash}" | grep -Eq '(bash|zsh|sh|ksh)$' && printf '%s' "${SHELL:-/bin/bash}" || echo /bin/bash)"
+    echo "#PIWEB_TLS_CERT="
+    echo "#PIWEB_TLS_KEY="
+    echo "#PIWEB_NO_PTY=0"
     echo "WEB_PASS=$(head -c 18 /dev/urandom | base64 | tr -d '/+=' | cut -c1-16)"
     echo "WEB_SECRET=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
   } > "$ENVF"

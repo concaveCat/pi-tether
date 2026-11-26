@@ -17,19 +17,68 @@
 └── logs/server.log
 ```
 
+## 前置依赖
+
+| 依赖 | 说明 |
+|---|---|
+| Node.js **>= 20** | 必须能在同一条命令里跑起来（nvm 用户请在装了 node 的 shell 里执行） |
+| `pi` | `npm i -g @earendil-works/pi-coding-agent`，且 `pi` 在登录 shell 的 PATH 里 |
+| `tmux` | 会话持久化（终端视图 + `pi-*` 会话都靠它） |
+| 构建工具 | `node-pty` 是原生模块，装它需要 `make` / `g++` / `python3` |
+| Linux / macOS / WSL2 | Windows 原生不支持（依赖 pty + tmux）。WSL2 下要开 `systemd` 才能与 systemd 单元配合 |
+
+<details><summary>各平台装依赖</summary>
+
+```bash
+# RHEL / CentOS / Rocky
+sudo dnf install -y gcc-c++ make python3 tmux
+# Debian / Ubuntu
+sudo apt install -y g++ make python3 tmux
+# macOS（Homebrew）
+brew install tmux && xcode-select --install
+# WSL2：先确认 /etc/wsl.conf 里有 [boot] systemd=true
+```
+</details>
+
+`node-pty` 编不出来也不影响用：`PIWEB_NO_PTY=1` 会关掉终端视图（对话/文件照常），
+或者装好构建工具后 `npm rebuild node-pty`。
+
 ## 快速开始
 
 ```bash
-cd /root/pi-web
-./start.sh start          # 生成 .env（随机密码）并在 tmux 里常驻
-cat .env                  # 看密码，也可改成自己的 WEB_PASS 后 restart
-./start.sh status         # 端口 + 存活会话
-./start.sh logs           # 跟踪日志
-./start.sh stop           # 只停 web 服务，pi-* / 对话进程内存里的东西不受影响（见下）
-cd /root/pi-web && node selftest.mjs    # 自检（会临时起会话并自动清理）
+git clone <repo> pi-web && cd pi-web
+npm install                     # 会编译 node-pty
+cp .env.example .env && chmod 600 .env
+$EDITOR .env                    # 至少改 WEB_PASS；HOST 默认只绑 127.0.0.1
+./start.sh start                # 后台常驻（有 systemd 就装成服务）
+./start.sh status               # 端口 + 监听地址
+./start.sh logs                 # 跟踪日志
+./start.sh stop                 # 只停 web 服务，pi 会话不受影响
+node selftest.mjs               # 45 项端到端自检（会临时起会话并自动清理）
 ```
 
-手动前台运行：`WEB_PASS='...' HOST=127.0.0.1 PORT=8765 node server.mjs`（未设 `WEB_PASS` 拒绝启动）
+手动前台运行：`WEB_PASS='...' node server.mjs`（未设 `WEB_PASS` 会拒绝启动）。
+
+启动后访问 `http://127.0.0.1:8765`。手机/别的机器要用，见「手机访问」一节——
+**不要**把它直接暴露到公网。
+
+## 配置（.env / 环境变量）
+
+| 变量 | 默认 | 作用 |
+|---|---|---|
+| `WEB_PASS` | 必填 | 登录密码；未设置则拒绝启动 |
+| `WEB_SECRET` | 随机 | Cookie 签名密钥；不设则每次重启都掉登录 |
+| `HOST` | `127.0.0.1` | 逗号分隔的监听地址；`tailscale` 关键字展开成 tailnet IPv4（没装 tailscale 会跳过） |
+| `PORT` | `8765` | 端口 |
+| `PIWEB_ROOT` | `$HOME` | 文件浏览 / agent 工作目录的沙箱根（realpath 校验，软链逃逸被拒） |
+| `PIWEB_SHELL` | `$SHELL`→`/bin/bash` | 起 `pi` 用的登录 shell（`-l` 才会带上你的 PATH/代理/API key）；fish/csh 会自动回落到 bash |
+| `PI_CODING_AGENT_DIR` | `~/.pi/agent` | pi 自己的配置目录；`/resume` 读的 `<它>/sessions` |
+| `PIWEB_NO_PTY` | `0` | 设 1 关闭终端视图（node-pty 装不上时用） |
+| `PIWEB_TLS_CERT` / `PIWEB_TLS_KEY` | 空 | 直接以 HTTPS 起服务 |
+| `PIWEB_ALLOW_PLAINTEXT` | `0` | 设 1 关掉「非回环地址是明文 HTTP」的警告 |
+| `PIWEB_DEBUG` | `0` | 设 1 打印会话所有权的 claim/release |
+
+诊断入口：`GET /api/me` 会返回当前生效的 `root` / `sessionsRoot` / `shell` / `pty` / `tls`。
 
 ## 三个视图
 
@@ -130,10 +179,12 @@ RPC 模式也不会展开它们，原样发出去就是一段聊天文本——�
 | 项 | 实现 |
 |---|---|
 | 鉴权 | 登录 POST → HMAC token 存 `HttpOnly` Cookie（30 天）；同时接受 Basic（curl 友好）。**HTTP API 与两个 WS Upgrade 握手都校验**，未鉴权 `/api/*` → 401、`/ws*` → 401 断开 |
-| 路径沙箱 | `path.resolve` + `fs.realpathSync` 双检，真实路径须严格在 `/root` 内；含 `..` → 400，绝对路径只在 `/root` 前缀下接受，软链接逃逸 → 403 |
-| 命令注入 | tmux / pi 一律 `execFileSync('tmux',[argv])` / `pty.spawn` / `spawn(bash,['-lic','exec "$@"',…])`，从不用 shell 拼串；对话内容只走 RPC JSON |
+| 路径沙箱 | `path.resolve` + `fs.realpathSync` 双检，真实路径须严格在 `PIWEB_ROOT`（默认 `$HOME`）内；含 `..` → 400，绝对路径只在根前缀下接受，软链接逃逸 → 403 |
+| 命令注入 | tmux / pi 一律 `execFileSync('tmux',[argv])` / `pty.spawn` / `spawn($SHELL,['-lic','exec "$@"',…])`，从不用 shell 拼串；对话内容只走 RPC JSON |
 | 会话名 | `^pi-…$` / `^chat-…$` 前缀白名单，`kill-session` 前再核对确实存在 |
-| 网络 | 默认只听 `127.0.0.1`；只面向 Tailscale 私网，无公网暴露方案 |
+| 网络 | 默认只听 `127.0.0.1`。绑非回环地址且未开 TLS 时会打印明文警告；推荐 Tailscale / SSH 隧道 / 反代，**不要直接开到公网** |
+| 传输加密 | 可选 `PIWEB_TLS_CERT`/`PIWEB_TLS_KEY` 直接起 HTTPS；否则请依赖 Tailscale/WireGuard 这类链路加密 |
+| 单用户 | 一个实例 = 一个人。多人共用会互相看到对话、能写同一会话；共享请各自跑一个实例（用 tailnet ACL 或不同端口隔离） |
 | 前端 | 所有模型输出先 HTML 转义再上极小 markdown 白名单；无 CDN、无第三方脚本 |
 | 暴力破解 | 5 分钟内 12 次失败 → 登录锁 5 分钟 |
 

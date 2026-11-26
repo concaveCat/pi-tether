@@ -1,15 +1,44 @@
 {
   "name": "pi-web",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+  "version": "0.1.0",
+  "description": "Mobile web workbench for the pi coding agent: chat transcript, file browser and a real tmux/native PTY terminal, reachable over a private network.",
+  "type": "module",
+  "main": "server.mjs",
+  "bin": {
+    "pi-web": "server.mjs"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
+  "scripts": {
+    "start": "node server.mjs",
+    "service": "./start.sh",
+    "selftest": "node selftest.mjs",
+    "check": "node --check server.mjs && node --check chat.mjs && node --check panel.mjs && node --check selftest.mjs"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "keywords": [
+    "pi",
+    "pi-coding-agent",
+    "coding-agent",
+    "web-ui",
+    "mobile",
+    "tmux",
+    "xterm",
+    "tailscale"
+  ],
+  "license": "MIT",
+  "files": [
+    "server.mjs",
+    "chat.mjs",
+    "panel.mjs",
+    "public/",
+    "tmux.conf",
+    "start.sh",
+    "selftest.mjs",
+    "README.md",
+    "LICENSE",
+    ".env.example"
+  ],
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
@@ -17,6 +46,7 @@
     "node-pty": "^1.1.0",
     "ws": "^8.23.0"
   },
+  "optionalDependencies": {},
   "allowScripts": {
     "node-pty@1.1.0": true
   }

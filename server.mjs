@@ -2,7 +2,7 @@
 /**
  * pi-web — mobile-friendly web front-end for the `pi` coding agent on this WSL box.
  *
- *  - file browser limited to /root (realpath-checked sandbox)
+ *  - file browser limited to PIWEB_ROOT (defaults to $HOME, realpath-checked)
  *  - persistent per-directory `pi` sessions inside tmux (survive disconnects)
  *  - real PTY (node-pty) + tmux attach over WebSocket => full TUI fidelity
  *
@@ -15,17 +15,38 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import os from 'node:os';
+import https from 'node:https';
 import { execFileSync } from 'node:child_process';
 import { WebSocketServer } from 'ws';
-import pty from 'node-pty';
-import { Chat, findLatestSession } from './chat.mjs';
+import { Chat, findLatestSession, SESSIONS_ROOT, SHELL_BIN } from './chat.mjs';
+
+// node-pty is a native module: if it cannot be built/loaded the chat still works,
+// only the terminal view is unavailable (PIWEB_NO_PTY=1 forces that state).
+let pty = null;
+if (process.env.PIWEB_NO_PTY !== '1') {
+  try { pty = (await import('node-pty')).default; } catch (err) {
+    console.error(`[pi-web] WARN: node-pty 不可用（${err.code || err.message}），终端视图已禁用；` +
+      ' 其余功能正常。装构建工具后 npm rebuild node-pty 即可恢复。');
+  }
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const HOST_SPEC = process.env.HOST || '127.0.0.1';
 const PORT = Number(process.env.PORT || 8765);
 const WEB_PASS = process.env.WEB_PASS || '';
-const ROOT = '/root';
+/** sandbox root: PIWEB_ROOT, else the invoking user's home */
+const ROOT = (() => {
+  const wanted = process.env.PIWEB_ROOT || os.homedir();
+  try { return fs.realpathSync(wanted); } catch {
+    console.error(`[pi-web] FATAL: PIWEB_ROOT 不存在: ${wanted}`);
+    process.exit(1);
+  }
+})();
+const TLS_CERT = process.env.PIWEB_TLS_CERT || '';
+const TLS_KEY = process.env.PIWEB_TLS_KEY || '';
+const USE_TLS = !!(TLS_CERT && TLS_KEY);
 const MAX_PREVIEW = 200 * 1024;          // 200 KB text preview cap
 const SESSION_RE = /^pi-[a-zA-Z0-9_-]+$/;
 const CHAT_RE = /^chat-[a-zA-Z0-9_-]+$/;
@@ -158,7 +179,7 @@ function createSession(name, dirAbs) {
     'new-session', '-d', '-s', name, '-c', dirAbs,
     '-e', `PATH=${process.env.PATH || '/usr/local/bin:/usr/bin:/bin'}`,
     '-e', 'TERM=xterm-256color',
-    'bash', '-lic', 'pi; exec bash -i',
+    SHELL_BIN, '-lic', `pi; exec ${SHELL_BIN} -i`,
   ], { timeout: 20000 });
   // apply again now that the server surely exists (no-op for a fresh server that
   // already loaded TMUX_CONF)
@@ -284,7 +305,10 @@ app.use(express.static(path.join(__dirname, 'public'), { index: 'index.html', et
 
 /* -------------------------------------------------------------- file APIs */
 
-app.get('/api/me', (req, res) => res.json({ ok: true, root: ROOT }));
+app.get('/api/me', (req, res) => res.json({
+  ok: true, root: ROOT, sessionsRoot: SESSIONS_ROOT, shell: SHELL_BIN,
+  pty: !!pty, tls: USE_TLS, node: process.version, port: PORT,
+}));
 
 app.get('/api/files', async (req, res, next) => {
   try {
@@ -619,6 +643,8 @@ function onUpgrade(req, socket, head) {
     return wssChat.handleUpgrade(req, socket, head, (ws) => wssChat.emit('connection', ws, req, chat));
   }
 
+  if (!pty) return rejectUpgrade(socket, 501, 'Terminal disabled: node-pty unavailable (chat still works)');
+
   const session = url.searchParams.get('session') || '';
   if (!SESSION_RE.test(session)) return rejectUpgrade(socket, 400, 'Bad Request');
   let alive = false;
@@ -786,6 +812,12 @@ wss.on('connection', (ws, req, url) => {
   const cols = Math.max(20, Math.min(400, Number(url.searchParams.get('cols')) || 80));
   const rows = Math.max(6, Math.min(200, Number(url.searchParams.get('rows')) || 24));
 
+  if (!pty) {
+    ws.send(JSON.stringify({ t: 'error', m: '终端视图不可用：node-pty 未加载（装好构建工具后 npm rebuild node-pty，或用 PIWEB_NO_PTY=1 明确禁用）。对话视图不受影响。' }));
+    ws.close();
+    return;
+  }
+
   let term;
   try {
     term = pty.spawn('tmux', ['attach-session', '-t', session], {
@@ -843,6 +875,10 @@ wss.on('connection', (ws, req, url) => {
 /* ------------------------------------------------------------------ boot */
 
 async function tailscaleIps(waitMs) {
+  if (!HAS_TAILSCALE) {
+    console.warn('[pi-web] WARN: HOST 里写了 tailscale，但本机没有 tailscale 命令，跳过该地址');
+    return [];
+  }
   const deadline = Date.now() + waitMs;
   for (let attempt = 1; ; attempt += 1) {
     try {
@@ -859,16 +895,19 @@ async function tailscaleIps(waitMs) {
   }
 }
 
+const SCHEME = USE_TLS ? 'https' : 'http';
 const listeners = [];
 const boundHosts = new Set();
 const pendingHosts = new Set();       // tailnet address not on the interface yet
 let tailscalePending = false;          // `tailscale` keyword resolved to nothing yet
 const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
-const hostUrl = (host) => `http://${host.includes(':') ? `[${host}]` : host}:${PORT}`;
+const hostUrl = (host) => `${SCHEME}://${host.includes(':') ? `[${host}]` : host}:${PORT}`;
 
 /** one bind attempt on a fresh server object; resolves { ok, err } */
 const bindHost = (host) => new Promise((resolve) => {
-  const srv = http.createServer(app);
+  const srv = USE_TLS
+    ? https.createServer({ cert: fs.readFileSync(TLS_CERT), key: fs.readFileSync(TLS_KEY) }, app)
+    : http.createServer(app);
   srv.on('upgrade', onUpgrade);
   const onErr = (err) => { srv.removeAllListeners('error'); resolve({ ok: false, err }); };
   srv.once('error', onErr);
@@ -878,6 +917,11 @@ const bindHost = (host) => new Promise((resolve) => {
     listeners.push(srv);
     boundHosts.add(host);
     console.log(`[pi-web] listening on ${hostUrl(host)}`);
+    const loopback = host.startsWith('127.') || host === '::1' || host === 'localhost';
+    if (!loopback && !USE_TLS && process.env.PIWEB_ALLOW_PLAINTEXT !== '1') {
+      console.warn(`[pi-web] ⚠ ${hostUrl(host)} 是明文 HTTP：只应经 Tailscale/WireGuard 等私有网络访问。`);
+      console.warn('           公网或不可信 LAN 请配置 PIWEB_TLS_CERT / PIWEB_TLS_KEY，或设 PIWEB_ALLOW_PLAINTEXT=1 关闭此提醒。');
+    }
     resolve({ ok: true, srv });
   });
 });
@@ -897,7 +941,12 @@ async function bindWithRetry(host, attempts, gapMs) {
   return false;
 }
 
+const HAS_TAILSCALE = (() => {
+  try { execFileSync('tailscale', ['version'], { stdio: 'ignore', timeout: 5000 }); return true; } catch { return false; }
+})();
+
 const tailscaleIpOnce = () => {
+  if (!HAS_TAILSCALE) return [];
   try {
     return execFileSync('tailscale', ['ip', '-4'], { encoding: 'utf8', timeout: 5000 })
       .split('\n').map((x) => x.trim()).filter(Boolean);
@@ -958,6 +1007,7 @@ const healStart = Date.now();
 
 setTimeout(() => {
   console.log(`[pi-web] root sandbox: ${ROOT} · auth: WEB_PASS (${WEB_PASS.length} chars) + HttpOnly cookie`);
+  console.log(`[pi-web] pi sessions: ${SESSIONS_ROOT} · shell: ${SHELL_BIN} · pty: ${pty ? 'on' : 'OFF'} · tls: ${USE_TLS ? 'on' : 'off'}`);
   try { const s = tmuxList(); console.log(`[pi-web] live pi sessions at boot: ${s.length}`); } catch {}
 }, 200);
 

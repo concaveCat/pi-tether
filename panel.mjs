@@ -8,15 +8,16 @@
  *
  *   <cwd>/.pi/goals/active_goal_<ts>_<id>.md   goal record (JSON + prompt)
  *   <cwd>/.pi/goals/goal_events.jsonl          ledger: audit results, pauses…
- *   /tmp/pi-subagents-uid-<uid>/async-subagent-runs/<id>/status.json
+ *   <tmpdir>/pi-subagents-uid-<uid>/async-subagent-runs/<id>/status.json
  *
  * Everything here is best-effort: a missing file simply yields no panel
  * section, never an error.
  */
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
-const TMP_DIR = '/tmp';
+const TMP_DIR = os.tmpdir();
 const RUN_DIR_RE = /^pi-subagents-uid-\d+$/;
 const MAX_LEDGER_BYTES = 4 * 1024 * 1024;
 const MAX_CHILD_SESSION_BYTES = 12 * 1024 * 1024;

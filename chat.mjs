@@ -12,11 +12,29 @@
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { readPanel } from './panel.mjs';
 
 const PANEL_POLL_MS = 4000;
-const SESSIONS_ROOT = '/root/.pi/agent/sessions';
+/** pi's agent dir: PI_CODING_AGENT_DIR is pi's own override, default ~/.pi/agent */
+const AGENT_DIR = process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), '.pi', 'agent');
+const SESSIONS_ROOT = path.join(AGENT_DIR, 'sessions');
+
+/**
+ * Login shell used for pi child processes. `-l` is what makes PATH / proxy /
+ * API keys match the terminal, so we honour $SHELL / PIWEB_SHELL — but only for
+ * shells that can run the POSIX form `exec "$@"` (fish/csh/nu cannot).
+ */
+const SHELL_BIN = (() => {
+  const POSIX = /(bash|zsh|sh|ksh|dash|ash)$/;
+  const candidates = [process.env.PIWEB_SHELL, process.env.SHELL, '/bin/bash', '/bin/sh'];
+  for (const c of candidates) {
+    if (!c || !POSIX.test(c)) continue;
+    try { fs.accessSync(c, fs.constants.X_OK); return c; } catch { /* try next */ }
+  }
+  return '/bin/sh';
+})();
 const MAX_OUT = 16000;            // characters kept per tool output block
 const MAX_ITEMS = 600;
 const FLUSH_MS = 60;              // coalesce streaming patches
@@ -158,6 +176,8 @@ export function listSessions(cwd, limit = 40) {
   return out;
 }
 
+export { SESSIONS_ROOT, SHELL_BIN };
+
 export class Chat extends EventEmitter {
   constructor({ name, dir, env, resume }) {
     super();
@@ -238,7 +258,7 @@ export class Chat extends EventEmitter {
     if (resume) { this.lastSessionPath = resume; args.push('--session', resume); }
     // login shell so PATH / proxy / model config match the real terminal;
     // `exec "$@"` keeps argument boundaries intact (no shell string building)
-    this.child = spawn('bash', ['-lic', 'exec "$@"', 'pi-web', ...args], {
+    this.child = spawn(SHELL_BIN, ['-lic', 'exec "$@"', 'pi-web', ...args], {
       cwd: this.dir,
       env: this.env,
       stdio: ['pipe', 'pipe', 'pipe'],

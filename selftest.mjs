@@ -11,6 +11,10 @@ const PORT = process.env.PORT || (fs.existsSync(envFile) ? (fs.readFileSync(envF
 const BASE = process.env.B || `http://127.0.0.1:${PORT}`;
 const WS = BASE.replace(/^http/, 'ws');
 const PASS = process.env.P || envPass;
+// 沙箱根由服务端决定（PIWEB_ROOT 或 $HOME），自检不要假设 /root
+const ROOT = process.env.PIWEB_ROOT || (() => {
+  try { return execFileSync('bash', ['-lc', 'printf %s "$HOME"'], { encoding: 'utf8' }).trim(); } catch { return '/root'; }
+})();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const jar = {};
 const results = [];
@@ -74,12 +78,12 @@ const t2 = await api('/api/file?path=../../etc/passwd');
 check('?path=../../etc/passwd => 400/403', t2.status === 400 || t2.status === 403, 'got ' + t2.status);
 const t3 = await api('/api/files?path=%2Fetc');
 check('?path=/etc => 400/403', t3.status === 400 || t3.status === 403, 'got ' + t3.status);
-execFileSync('ln', ['-sfn', '/etc', '/root/.piweb_esc']);
+execFileSync('ln', ['-sfn', '/etc', `${ROOT}/.piweb_esc`]);
 const t4 = await api('/api/files?path=.piweb_esc');
 check('软链接逃逸 => 403', t4.status === 403, 'got ' + t4.status + ' ' + t4.json?.error);
 const t5 = await api('/api/file?path=.piweb_esc/passwd');
 check('软链接内文件 => 403', t5.status === 403, 'got ' + t5.status);
-execFileSync('rm', ['-f', '/root/.piweb_esc']);
+execFileSync('rm', ['-f', `${ROOT}/.piweb_esc`]);
 const t6 = await api('/api/sessions/bad%3Brm%20-rf', { method: 'DELETE' });
 check('DELETE 非法会话名 => 400', t6.status === 400, 'got ' + t6.status);
 const wBad = await new Promise((res) => { const ws = new WebSocket(WS+'/ws?session=' + encodeURIComponent('pi-a;rm -rf /'), { headers: { Cookie: cookieHeader() } }); ws.on('unexpected-response', (_q, r) => res(r.statusCode)); ws.on('open', () => res(101)); ws.on('error', () => res('err')); setTimeout(() => res('timeout'), 3000); });
