@@ -168,8 +168,8 @@ export class Chat extends EventEmitter {
     this.resumeSpec = resume;
     this.fileSizeSeen = 0;
     this.foreignWarned = false;
-    this.idleWatch = null;
     this.lastEventAt = Date.now();
+    this.idleWatch = null;
     this.items = [];
     this.state = {
       alive: false, streaming: false, model: null, thinkingLevel: null,
@@ -465,6 +465,7 @@ export class Chat extends EventEmitter {
   }
 
   onRecord(rec) {
+    this.lastEventAt = Date.now();
     if (rec.type === 'response') {
       const p = this.pending.get(rec.id);
       if (p) {
@@ -834,7 +835,10 @@ export class Chat extends EventEmitter {
   /**
    * Two pi processes on one session file fork the JSONL tree and the losing
    * branch disappears from the active context. pi has no session lock, so we
-   * detect foreign appends: while we are idle the file must not grow.
+   * look for foreign appends conservatively: only *message* entries, only while
+   * this chat has been idle for a minute, and only when two checks in a row see
+   * growth. That keeps pi's own late bookkeeping entries (usage/cache_warm)
+   * from raising a false alarm.
    */
   startForeignWatch() {
     if (this.idleWatch) return;
@@ -842,20 +846,31 @@ export class Chat extends EventEmitter {
     this.idleWatch = setInterval(() => {
       const file = this.state.sessionFile;
       if (!file || !this.state.alive) return;
-      if (this.state.streaming || this.booting) { suspects = 0; return; }
+      if (this.state.streaming || this.booting || Date.now() - this.lastEventAt < 60000) { suspects = 0; return; }
       let size = 0;
       try { size = fs.statSync(file).size; } catch { return; }
-      if (size > this.fileSizeSeen + 64) {
-        suspects += 1;
-        if (suspects >= 2 && !this.foreignWarned) {
-          this.foreignWarned = true;
-          this.notice(`另一进程也在写这个会话（${path.basename(file)}）。继续会在 JSONL 里分叉，另一支会被丢弃。`, 'error');
-          this.emit('foreign', file);
-          this.fileSizeSeen = size;
-        }
-      } else {
+      if (size <= this.fileSizeSeen + 32) {
         suspects = 0;
         if (size < this.fileSizeSeen) this.fileSizeSeen = size;
+        return;
+      }
+      // only count real conversation entries in the appended bytes
+      let foreignMessages = 0;
+      try {
+        const fd = fs.openSync(file, 'r');
+        try {
+          const len = Math.min(size - this.fileSizeSeen, 1024 * 1024);
+          const buf = Buffer.alloc(len);
+          fs.readSync(fd, buf, 0, len, this.fileSizeSeen);
+          foreignMessages = (buf.toString('utf8').match(/"type"\s*:\s*"message"/g) || []).length;
+        } finally { fs.closeSync(fd); }
+      } catch { return; }
+      if (foreignMessages === 0) { suspects = 0; return; }
+      suspects += 1;
+      if (suspects >= 2 && !this.foreignWarned) {
+        this.foreignWarned = true;
+        this.notice(`另一进程也在写这个会话（${path.basename(file)}）：继续会在 JSONL 里分叉，另一支会被丢弃。`, 'error');
+        this.emit('foreign', file);
       }
     }, 15000);
     this.idleWatch.unref?.();

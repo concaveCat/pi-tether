@@ -196,6 +196,28 @@ unit 里写的是 `After=network-online.target tailscaled.service` + `Wants=tail
 > `schtasks /create /tn WSL-EXP /sc onlogon /tr "wsl.exe -d EXP -u root --exec /usr/bin/sleep infinity"`
 > （发行版名是 `EXP`；`-u root` 是为了不依赖哪个用户先登录）。
 
+## 同一会话不能两个进程写（分叉防护）
+
+pi 的会话文件是**追加式 JSONL 树**（每条记录带 `parentId`），而且 **pi 自己不加会话级文件锁**
+（发行版里那个 `proper-lockfile` 只用于 MCP 凭据）。所以两个 `pi --mode rpc` 同时写同一个
+`.jsonl` 时，会各写一条链，最后落盘的那条成为 leaf，另一条从此不在上下文里 —— 就是你看到的
+"两个分支、丢了一个"。
+
+pi-web 因此在服务端做仲裁，规则是**一个会话文件只允许一个活进程**：
+
+| 场景 | 行为 |
+|---|---|
+| 同目录再开一个窗口（不带「新对话」） | **复用同一个 chat**（`joined:true`）→ 两个浏览器窗口订阅同一进程，天然同步，不可能分叉 |
+| 「新对话」 | 一定是**新 session 文件**，绝不接管别人正在写的那个（`resume:false`） |
+| `/resume` 选到别人正在写的会话 | 拒绝并指出占用者：`该会话正在「chat-xxx」里使用`，界面给「切到那个对话」按钮 |
+| 那个对话关掉后 | 所有权释放，会话可以被接管 |
+| 别的进程（终端里的 `pi`）在写同一文件 | 空闲 ≥60s 后连续两次巡检发现**新增 message 条目** → 报错提示「另一进程也在写这个会话」；pi 自己的 `usage`/`cache_warm` 记账条目不误报 |
+
+所有权的键用**规范路径**：pi 在 `get_state` 里返回的是"计划路径"，jsonl 往往还没落盘，
+所以不能直接用 `realpathSync`（会失败并静默跳过登记），而是回落到「解析父目录再拼 basename」。
+
+诊断：`PIWEB_DEBUG=1` 启动时会打印每次 claim/release。
+
 ## 设计语言
 
 纯白纸式排版，没有卡片/气泡/色块容器：分隔只有 1px 细线（`#1b2431`），

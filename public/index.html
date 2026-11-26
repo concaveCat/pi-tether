@@ -552,6 +552,7 @@
     for (const r of rows) {
       const row = document.createElement('button');
       row.className = 'prow' + (r.current ? ' cur' : '');
+      if (r.data) row.dataset.path = r.data;
       const t = document.createElement('span');
       t.className = 'pt';
       t.textContent = r.label;
@@ -1036,6 +1037,7 @@
     if (!rows.length) { openText('会话', '该目录还没有可恢复的会话。'); return; }
     openPicker('恢复会话', rows.map((r) => ({
       label: (r.name ? r.name + ' · ' : '') + (r.preview || '(无用户消息)'),
+      data: r.path,
       meta: [
         fmtClock(r.mtimeMs),
         (r.messages ?? '?') + ' 条',

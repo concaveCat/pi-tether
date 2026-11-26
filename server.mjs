@@ -412,7 +412,21 @@ const chats = new Map();                 // name -> Chat (one long-lived pi --mo
  */
 const sessionOwners = new Map();         // realpath(session.jsonl) -> chat name
 
-const realOrNull = (p) => { try { return fs.realpathSync(p); } catch { return null; } };
+/**
+ * Canonical key for a session path. pi reports the *planned* session file in
+ * get_state before the .jsonl exists, so realpath alone would fail and the
+ * claim would be silently skipped; resolve the parent directory instead.
+ */
+const canonSessionPath = (p) => {
+  if (typeof p !== 'string' || !p) return null;
+  try { return fs.realpathSync(p); } catch { /* not written yet */ }
+  const dir = path.dirname(p);
+  const base = path.basename(p);
+  try { return path.join(fs.realpathSync(dir), base); } catch { return path.resolve(p); }
+};
+const realOrNull = canonSessionPath;
+const OWN_DEBUG = process.env.PIWEB_DEBUG === '1';
+const ownLog = (...a) => { if (OWN_DEBUG) console.log('[own]', ...a); };
 const ownerOf = (p) => {
   const real = realOrNull(p);
   if (!real) return null;
@@ -424,15 +438,20 @@ const ownerOf = (p) => {
 };
 const claimSession = (chat, file) => {
   const real = realOrNull(file);
-  if (!real) return true;
+  if (!real) { ownLog(`claim ${chat.name}: 无法规范化 ${file}`); return true; }
   const owner = ownerOf(real);
-  if (owner && owner !== chat.name) return false;
+  if (owner && owner !== chat.name) { ownLog(`claim ${chat.name} 被拒：${real.split('/').pop()} 属于 ${owner}`); return false; }
   sessionOwners.set(real, chat.name);
   chat.claimedReal = real;
+  ownLog(`claim ${chat.name} ← ${real.split('/').pop()}`);
   return true;
 };
 const releaseChat = (name) => {
-  for (const [real, owner] of [...sessionOwners]) if (owner === name) sessionOwners.delete(real);
+  for (const [real, owner] of [...sessionOwners]) {
+    if (owner !== name) continue;
+    sessionOwners.delete(real);
+    ownLog(`release ${name} → ${real.split('/').pop()}`);
+  }
 };
 
 const chatNameFor = (dirAbs) => {
